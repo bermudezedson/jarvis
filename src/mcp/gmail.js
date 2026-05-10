@@ -322,9 +322,9 @@ async function healthCheck() {
  * @param {{ timeWindowMinutes?: number }} options
  */
 async function universalInboxScan({ timeWindowMinutes = 90 } = {}) {
-  // Use 2h window minimum to compensate Gmail indexing delays; overlap is fine
-  // because SQLite deduplicates by thread_id + content_hash
-  const hours = Math.max(2, Math.ceil(timeWindowMinutes / 60));
+  // Use 8h window minimum to compensate Gmail indexing delays + ensure no gaps.
+  // Overlap is free because SQLite deduplicates by thread_id + content_hash.
+  const hours = Math.max(8, Math.ceil(timeWindowMinutes / 60));
   logger.info('Universal inbox scan', { skill: SKILL, hours });
 
   const allThreads = [];

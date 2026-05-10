@@ -47,13 +47,9 @@ export function useJarvisData() {
   }, [viewMode, fetchDashboard]);
 
   const refresh = useCallback(async () => {
-    // Universal scan: fetch ALL inbox threads, not just known clients
+    // Universal scan: fetch ALL inbox threads (server auto-calculates window)
     try {
-      await fetch(`${API}/mail/universal-scan`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ timeWindowMinutes: 90 }),
-      });
+      await fetch(`${API}/mail/universal-scan`, { method: 'POST' });
     } catch {}
     // Refresh daily briefing (Calendar, Jira, etc.)
     try {

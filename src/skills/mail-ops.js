@@ -1048,12 +1048,28 @@ async function processUniversalScan(threads) {
 
 /**
  * Entry point for the universal scan cron/endpoint.
+ * If timeWindowMinutes is not provided, auto-calculates based on time since last scan.
+ * Falls back to 48h for the first scan ever (so the button is immediately useful).
  */
-async function runUniversalScan({ timeWindowMinutes = 90 } = {}) {
+async function runUniversalScan({ timeWindowMinutes } = {}) {
   const db      = require('../db/database');
   const gmail   = require('../mcp/gmail');
   const logId   = db.startScanLog('universal');
   const errors  = [];
+
+  // Auto-calculate window: time since last universal scan + 30 min overlap, min 8h, max 48h
+  // Minimum 8h ensures we never miss emails even if Gmail indexing is delayed.
+  // Dedup by thread_id+content_hash makes overlap free.
+  if (!timeWindowMinutes) {
+    const lastScan = db.getLastUniversalScan();
+    if (!lastScan) {
+      timeWindowMinutes = 48 * 60; // First run: scan last 48h
+    } else {
+      const minsSinceLast = Math.ceil((Date.now() - new Date(lastScan).getTime()) / 60000);
+      timeWindowMinutes   = Math.min(Math.max(minsSinceLast + 30, 8 * 60), 48 * 60);
+    }
+    logger.info('Universal scan window auto-calculated', { SKILL, timeWindowMinutes, hours: Math.round(timeWindowMinutes / 60) });
+  }
 
   try {
     const threads = await gmail.universalInboxScan({ timeWindowMinutes });
