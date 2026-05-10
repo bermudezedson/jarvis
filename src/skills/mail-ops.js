@@ -367,7 +367,7 @@ function countByEstado(classified) {
 
 // ─── Client deep-scan ─────────────────────────────────────────────────────────
 
-const processedCache = require('../cache/processed-threads');
+const db = require('../db/database');
 
 function calculateSeverity(lastSenderIsMe, daysSince) {
   if (lastSenderIsMe) {
@@ -397,7 +397,7 @@ function sortAndBuild(classified, mode, days, stats) {
   const byClient = {};
   classified.forEach(c => {
     byEstado[c.estado]      = (byEstado[c.estado]      || 0) + 1;
-    byClient[c.client.name] = (byClient[c.client.name] || 0) + 1;
+    if (c.client?.name) byClient[c.client.name] = (byClient[c.client.name] || 0) + 1;
   });
 
   const result = {
@@ -418,31 +418,50 @@ function sortAndBuild(classified, mode, days, stats) {
   return result;
 }
 
+/** Build summary directly from SQLite (used by refresh_states and incremental merge). */
+function sortAndBuildFromDb(stats, mode, days) {
+  const result = db.getClientThreadsSummary(stats);
+  result.scan_type   = mode;
+  result.days_window = days;
+  cache.write('client-threads.json', result);
+  return result;
+}
+
 /**
- * Recalculate severity/estado from the processed-threads cache.
+ * Recalculate severity/estado from SQLite.
  * Zero Gmail API calls.
  */
 function refreshStatesFromCache() {
-  const allCached = processedCache.getAllCached();
+  const sqlDb = db.getDb();
+  // Only update actionable threads — skip resolved/archived/jira/informativo
+  const active = sqlDb.prepare(`
+    SELECT * FROM threads
+    WHERE estado NOT IN ('solucionado','archivado','en_jira','informativo')
+  `).all();
 
-  const refreshed = allCached.map(c => {
-    const daysSince = Math.max(0, Math.floor((Date.now() - new Date(c.date).getTime()) / 86400000));
-    // Preserve manually-set states (archived, en_jira)
-    if (c.estado === 'archivado' || c.estado === 'en_jira') {
-      return { ...c, days_since_last: daysSince };
-    }
-    return {
-      ...c,
-      days_since_last:  daysSince,
-      severity:         calculateSeverity(c.last_sender_is_me, daysSince),
-      estado:           calculateEstado(c.last_sender_is_me, daysSince),
-      jira_suggested:   daysSince > 7,
-    };
-  });
+  const updateStmt = sqlDb.prepare(`
+    UPDATE threads SET
+      severity      = ?,
+      estado        = ?,
+      jira_suggested= ?,
+      updated_at    = datetime('now')
+    WHERE thread_id = ?
+  `);
 
-  const stats = { total: refreshed.length, new: 0, updated: 0, skipped: refreshed.length };
-  logger.info('Client refresh_states done', { skill: SKILL, total: refreshed.length });
-  return sortAndBuild(refreshed, 'refresh_states', null, stats);
+  let updated = 0;
+  for (const row of active) {
+    const daysSince = Math.max(0, Math.floor((Date.now() - new Date(row.date).getTime()) / 86400000));
+    const lsim = !!row.last_sender_is_me;
+    const newSeverity = calculateSeverity(lsim, daysSince);
+    const newEstado   = calculateEstado(lsim, daysSince);
+    const newJira     = daysSince > 7 ? 1 : 0;
+    updateStmt.run(newSeverity, newEstado, newJira, row.thread_id);
+    updated++;
+  }
+
+  const stats = { total: active.length, new: 0, updated, skipped: 0 };
+  logger.info('Client refresh_states done (SQLite)', { skill: SKILL, updated });
+  return sortAndBuildFromDb(stats, 'refresh_states', null);
 }
 
 /**
@@ -472,7 +491,7 @@ async function classifyClientThreads({ mode = 'initial', days = 30 } = {}) {
 
   if (mode === 'incremental') {
     // ─── Mode: incremental — only fetch since last scan ──────────────────────────
-    const lastScan = processedCache.getLastScan();
+    const lastScan = db.getLastScan();
     if (!lastScan) {
       logger.info('No previous scan found, forcing initial', { skill: SKILL });
       return classifyClientThreads({ mode: 'initial', days });
@@ -488,42 +507,29 @@ async function classifyClientThreads({ mode = 'initial', days = 30 } = {}) {
 
   const filtered = threads.filter(t => !shouldExclude(t));
 
-  // CEO addresses — last message from these = waiting for client
-  const ceoEmails = [
-    (process.env.CEO_EMAIL || 'alejandro@webyseo.cl').toLowerCase(),
+  // ─── Team / CEO config from rules.yml ────────────────────────────────────────
+  const teamDomains = (rules.team?.domains || ['clickrepuestos.cl', 'webyseo.cl'])
+    .map(d => d.toLowerCase());
+  const ceoEmails = (rules.team?.ceo_emails || [
+    process.env.CEO_EMAIL || 'alejandro@webyseo.cl',
     'alejandro@clickrepuestos.cl',
     'hablemos@clickrepuestos.cl',
-  ];
+  ]).map(e => e.toLowerCase());
+  const noActionPatterns = (rules.mail?.no_action_patterns || []).map(p => p.toLowerCase());
 
   const stats = { total: filtered.length, new: 0, updated: 0, skipped: 0 };
+  const sqlDb = db.getDb();
 
-  const classified = filtered.map(t => {
-    const hash   = processedCache.hashThread(t);
-    const action = processedCache.shouldProcess(t.id, hash);
+  for (const t of filtered) {
+    const currentHash = `${t.message_count}:${t.last_from_email || ''}:${t.date || ''}`;
+    const existing    = sqlDb.prepare('SELECT content_hash, estado FROM threads WHERE thread_id = ?').get(t.id);
 
-    if (action === 'skip') {
+    if (existing && existing.content_hash === currentHash) {
       stats.skipped++;
-      const cached = processedCache.getCached(t.id);
-      if (cached) {
-        const daysSince = Math.max(0, Math.floor((Date.now() - new Date(cached.date).getTime()) / 86400000));
-        // Preserve manually-set states
-        if (cached.estado === 'archivado' || cached.estado === 'en_jira') {
-          return { ...cached, days_since_last: daysSince };
-        }
-        return {
-          ...cached,
-          days_since_last: daysSince,
-          severity:        calculateSeverity(cached.last_sender_is_me, daysSince),
-          estado:          calculateEstado(cached.last_sender_is_me, daysSince),
-          jira_suggested:  daysSince > 7,
-        };
-      }
+      continue; // No changes — SQLite already has the right state
     }
 
-    if (action === 'new')     stats.new++;
-    if (action === 'updated') stats.updated++;
-
-    // ─── Match client ───────────────────────────────────────────────────────────
+    // ─── Match client ─────────────────────────────────────────────────────────
     let client = null;
     for (const email of (t.participants || [])) {
       const domain = email.split('@')[1];
@@ -531,65 +537,82 @@ async function classifyClientThreads({ mode = 'initial', days = 30 } = {}) {
       if (client) break;
     }
     if (!client) client = matchClient(extractDomain(t.from), extractEmail(t.from));
-    if (!client) return null;
+    if (!client) continue;
 
-    const lastSenderIsMe = ceoEmails.includes(t.last_from_email);
+    if (existing) stats.updated++; else stats.new++;
+
+    const lastFromEmail  = (t.last_from_email || '').toLowerCase();
+    const lastFromDomain = lastFromEmail.split('@')[1] || '';
+    const lastSenderIsCeo  = ceoEmails.includes(lastFromEmail);
+    const lastSenderIsTeam = teamDomains.some(d => lastFromDomain === d || lastFromDomain.endsWith('.' + d));
+    const lastSenderIsUs   = lastSenderIsCeo || lastSenderIsTeam;
+
     const daysSince = Math.max(0, Math.floor((Date.now() - new Date(t.date).getTime()) / 86400000));
 
-    const classification = {
-      thread_id:         t.id,
-      subject:           t.subject,
-      from:              t.from,
-      last_from:         t.last_from,
-      last_from_email:   t.last_from_email,
-      last_sender_is_me: lastSenderIsMe,
-      date:              t.date,
-      original_date:     t.original_date,
-      snippet:           t.snippet,
-      message_count:     t.message_count,
-      days_since_last:   daysSince,
-      estado:            calculateEstado(lastSenderIsMe, daysSince),
-      severity:          calculateSeverity(lastSenderIsMe, daysSince),
-      category:          lastSenderIsMe ? 'esperando_respuesta' : 'requiere_accion',
-      client: {
-        name:       client.name,
-        domain:     client.domains[0],
-        empresa:    client.empresa,
-        jira_label: client.jira_label,
-      },
-      accion_sugerida: lastSenderIsMe ? 'seguimiento' : 'responder',
-      jira_suggested:  daysSince > 7,
-      aprobado:        null,
-    };
+    // ─── Determine estado, category, severity ────────────────────────────────
+    const subjectLower = (t.subject || '').toLowerCase();
+    const isNoAction   = noActionPatterns.some(p => subjectLower.includes(p));
 
-    processedCache.markProcessed(t.id, hash, classification);
-    return classification;
-  }).filter(Boolean);
+    // Check learned rules first (CEO feedback overrides everything)
+    const learnedRule = db.findLearnedRule(t.subject, lastFromEmail);
 
-  // If incremental, merge with all cached threads not covered by this scan window
-  let allThreads = classified;
-  if (mode === 'incremental') {
-    const cached = processedCache.getAllCached();
-    const newIds = new Set(classified.map(c => c.thread_id));
-    const oldCached = cached
-      .filter(c => !newIds.has(c.thread_id))
-      .map(c => {
-        const daysSince = Math.max(0, Math.floor((Date.now() - new Date(c.date).getTime()) / 86400000));
-        return {
-          ...c,
-          days_since_last: daysSince,
-          severity:        calculateSeverity(c.last_sender_is_me, daysSince),
-          estado:          calculateEstado(c.last_sender_is_me, daysSince),
-          jira_suggested:  daysSince > 7,
-        };
-      });
-    allThreads = [...classified, ...oldCached];
+    let estado, category, severity, isInformativo;
+    if (learnedRule) {
+      estado        = learnedRule.correct_estado;
+      category      = learnedRule.correct_category;
+      severity      = learnedRule.correct_severity || 'none';
+      isInformativo = estado === 'informativo';
+    } else if (isNoAction) {
+      // Facturas, notificaciones, correos enviados por el equipo sin respuesta esperada
+      estado        = 'informativo';
+      category      = 'informativo';
+      severity      = 'none';
+      isInformativo = true;
+    } else if (lastSenderIsUs) {
+      // Nuestro equipo/CEO respondió último → esperando cliente
+      estado        = calculateEstado(true, daysSince);
+      category      = 'esperando_respuesta';
+      severity      = calculateSeverity(true, daysSince);
+      isInformativo = false;
+    } else {
+      // Cliente respondió último → requiere acción
+      estado        = calculateEstado(false, daysSince);
+      category      = 'requiere_accion';
+      severity      = calculateSeverity(false, daysSince);
+      isInformativo = false;
+    }
+
+    db.upsertThread({
+      thread_id:           t.id,
+      subject:             t.subject,
+      original_from:       t.from,
+      last_from:           t.last_from,
+      last_from_email:     t.last_from_email,
+      snippet:             t.snippet,
+      message_count:       t.message_count,
+      participants:        t.participants || [],
+      date:                t.date,
+      original_date:       t.original_date,
+      last_sender_is_me:   lastSenderIsCeo,
+      last_sender_is_team: lastSenderIsTeam,
+      is_informativo:      isInformativo,
+      category,
+      estado,
+      severity,
+      client_name:         client.name,
+      client_domain:       client.domains[0],
+      client_empresa:      Array.isArray(client.empresa) ? client.empresa.join(',') : client.empresa,
+      client_jira_label:   client.jira_label,
+      accion_sugerida:     isInformativo ? 'archivar' : lastSenderIsUs ? 'seguimiento' : 'responder',
+      jira_suggested:      !isInformativo && daysSince > 7,
+      content_hash:        currentHash,
+    });
   }
 
-  processedCache.setLastScan();
+  db.setLastScan();
 
-  logger.info('Client scan done', { skill: SKILL, mode, ...stats, total_merged: allThreads.length });
-  return sortAndBuild(allThreads, mode, days, stats);
+  logger.info('Client scan done', { skill: SKILL, mode, ...stats });
+  return sortAndBuildFromDb(stats, mode, days);
 }
 
 // ─── AI enhancement (optional) ───────────────────────────────────────────────

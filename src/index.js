@@ -14,6 +14,19 @@ const eveningClosing = require('./cron/evening-closing');
 const rules = yaml.load(fs.readFileSync(path.join(__dirname, '../config/rules.yml'), 'utf8'));
 const PORT = process.env.PORT || 3000;
 
+// Seed DB contacts from clients.yml on startup
+try {
+  const clientsPath = path.join(__dirname, '../config/clients.yml');
+  if (fs.existsSync(clientsPath)) {
+    const clientsConfig = yaml.load(fs.readFileSync(clientsPath, 'utf8'));
+    const db = require('./db/database');
+    db.init();
+    db.seedContactsFromConfig(Array.isArray(clientsConfig) ? clientsConfig : (clientsConfig.clients || []));
+  }
+} catch (e) {
+  // Non-fatal: contacts will just be unseeded
+}
+
 const app = express();
 
 app.use(cors({ origin: 'http://localhost:5173' }));

@@ -74,15 +74,16 @@ function header(headers, name) {
   return headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
 }
 
-function decodeBody(part) {
+function decodeBody(part, preferredType = 'text/plain') {
   if (!part) return '';
   if (part.body?.data) {
     return Buffer.from(part.body.data, 'base64').toString('utf-8');
   }
   if (part.parts) {
-    const text = part.parts.find(p => p.mimeType === 'text/plain');
-    const html = part.parts.find(p => p.mimeType === 'text/html');
-    return decodeBody(text || html || part.parts[0]);
+    const preferred = part.parts.find(p => p.mimeType === preferredType);
+    const fallback  = part.parts.find(p => p.mimeType === 'text/plain');
+    const html      = part.parts.find(p => p.mimeType === 'text/html');
+    return decodeBody(preferred || fallback || html || part.parts[0], preferredType);
   }
   return '';
 }
@@ -202,6 +203,58 @@ async function getThread(threadId) {
   return normalizeThread(t);
 }
 
+/**
+ * Returns all messages in a thread with full body content (text + html).
+ * Used for the accordion lazy load.
+ */
+async function getFullThread(threadId) {
+  logger.info('Fetching full thread', { skill: SKILL, threadId });
+  const t = await gmail('GET', `/threads/${threadId}?format=full`);
+  if (!t?.messages) return null;
+
+  const ceoEmails = [
+    (process.env.CEO_EMAIL || 'alejandro@webyseo.cl').toLowerCase(),
+    'alejandro@clickrepuestos.cl',
+    'hablemos@clickrepuestos.cl',
+  ];
+
+  const messages = t.messages.map(msg => {
+    const hdrs     = msg.payload?.headers || [];
+    const fromFull = header(hdrs, 'from');
+    const fromEmail= (fromFull.match(/[a-zA-Z0-9._%+-]+@[\w.-]+/) || [''])[0].toLowerCase();
+    return {
+      id:         msg.id,
+      from:       fromFull,
+      from_email: fromEmail,
+      date:       header(hdrs, 'date'),
+      subject:    header(hdrs, 'subject'),
+      body_text:  decodeBody(msg.payload, 'text/plain'),
+      body_html:  decodeBody(msg.payload, 'text/html'),
+      is_from_me: ceoEmails.includes(fromEmail),
+    };
+  });
+
+  return { thread_id: threadId, messages };
+}
+
+/**
+ * Send a reply to a thread via Gmail API.
+ */
+async function sendReply(to, subject, body, threadId) {
+  logger.info('Sending reply', { skill: SKILL, to, threadId });
+  const replySubject = subject?.startsWith('Re:') ? subject : `Re: ${subject || ''}`;
+  const raw = [
+    `To: ${to}`,
+    `Subject: ${replySubject}`,
+    'Content-Type: text/plain; charset=utf-8',
+    `MIME-Version: 1.0`,
+    '',
+    body,
+  ].join('\r\n');
+  const encoded = Buffer.from(raw).toString('base64url');
+  return gmail('POST', '/messages/send', { raw: encoded, threadId });
+}
+
 async function listLabels() {
   logger.info('Listing labels', { skill: SKILL });
   const data = await gmail('GET', '/labels');
@@ -265,6 +318,7 @@ async function healthCheck() {
 
 module.exports = {
   getUnreadThreads, getClientThreads, getSentEmails, searchThreads, getThread,
+  getFullThread, sendReply,
   listLabels, applyLabel, removeLabel, createLabel, createDraft,
   reportPhishing, healthCheck,
 };

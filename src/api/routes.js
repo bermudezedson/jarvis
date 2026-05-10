@@ -41,7 +41,13 @@ router.get('/dashboard', (req, res) => {
     briefing = cache.read(key) || cache.read('briefing-am.json') || cache.read('briefing-pm.json');
   }
 
-  const clientThreads = cache.read('client-threads.json');
+  let clientThreads = null;
+  try {
+    const db = require('../db/database');
+    clientThreads = db.getClientThreadsSummary();
+  } catch {
+    clientThreads = cache.read('client-threads.json');
+  }
   const mailClassifications = cache.read('mail-classifications.json');
   const lastRefresh = cache.read('last-refresh.json');
 
@@ -271,9 +277,25 @@ router.post('/mail/reclassify', (req, res) => {
 // ─── Client threads (deep scan — read + unread, 30-day window) ───────────────
 
 router.get('/mail/client-threads', (req, res) => {
-  const data = cache.read('client-threads.json');
-  if (!data) return res.json({ scanned: false, message: 'Ejecuta POST /mail/client-scan primero' });
-  res.json(data);
+  try {
+    const db = require('../db/database');
+    const { estado } = req.query;
+    if (estado === 'solucionado') {
+      const rows = db.getResolvedThreads().map(db.threadToApiFormat);
+      return res.json({ items: rows, total: rows.length, estado: 'solucionado' });
+    }
+    if (estado === 'archivado') {
+      const rows = db.getArchivedThreads().map(db.threadToApiFormat);
+      return res.json({ items: rows, total: rows.length, estado: 'archivado' });
+    }
+    const data = db.getClientThreadsSummary();
+    return res.json(data);
+  } catch (e) {
+    // fallback to JSON cache
+    const data = cache.read('client-threads.json');
+    if (!data) return res.json({ scanned: false, message: 'Ejecuta POST /mail/client-scan primero' });
+    res.json(data);
+  }
 });
 
 router.post('/mail/client-scan', async (req, res) => {
@@ -294,25 +316,153 @@ router.post('/mail/client-scan', async (req, res) => {
 
 router.post('/mail/client-archive', (req, res) => {
   try {
-    const { thread_id } = req.body;
+    const { thread_id, reason = '' } = req.body;
     if (!thread_id) return res.status(400).json({ error: 'thread_id required' });
-
-    const processedCache = require('../cache/processed-threads');
-    const data = processedCache.load();
-    if (!data.threads[thread_id]) return res.status(404).json({ error: 'Thread not found in cache' });
-
-    data.threads[thread_id].classification.estado    = 'archivado';
-    data.threads[thread_id].classification.severity  = 'none';
-    data.threads[thread_id].classification.archived_at = new Date().toISOString();
-    processedCache.save(data);
-
-    // Regenerate client-threads.json asynchronously
+    const db = require('../db/database');
+    const result = db.archiveThread(thread_id, reason);
+    if (!result) return res.status(404).json({ error: 'Thread not found' });
+    // Regenerate JSON cache asynchronously
     const mailOps = require('../skills/mail-ops');
     mailOps.classifyClientThreads({ mode: 'refresh_states' }).catch(() => {});
-
     logger.info('Client thread archived', { thread_id });
-    res.json({ success: true, thread_id, estado: 'archivado' });
+    res.json({ success: true, ...result });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/mail/client-resolve', (req, res) => {
+  try {
+    const { thread_id, note = '' } = req.body;
+    if (!thread_id) return res.status(400).json({ error: 'thread_id required' });
+    const db = require('../db/database');
+    const result = db.resolveThread(thread_id, note);
+    if (!result) return res.status(404).json({ error: 'Thread not found' });
+    const mailOps = require('../skills/mail-ops');
+    mailOps.classifyClientThreads({ mode: 'refresh_states' }).catch(() => {});
+    logger.info('Client thread resolved', { thread_id, resolution_hours: result.resolution_time_hours });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/mail/metrics', (req, res) => {
+  try {
+    const db = require('../db/database');
+    res.json(db.getResolutionMetrics());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/mail/thread/:threadId/messages', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const db = require('../db/database');
+
+    // Fetch from Gmail if not cached yet
+    if (!db.hasThreadMessages(threadId)) {
+      const gmail = require('../mcp/gmail');
+      const thread = await gmail.getFullThread(threadId);
+      if (!thread) return res.status(404).json({ error: 'Thread not found in Gmail' });
+      for (const msg of thread.messages) {
+        db.saveMessage({
+          message_id:   msg.id,
+          thread_id:    threadId,
+          sender:       msg.from,
+          sender_email: msg.from_email,
+          date:         msg.date,
+          body_text:    msg.body_text,
+          body_html:    msg.body_html,
+          is_from_me:   msg.is_from_me,
+        });
+      }
+    }
+
+    // Enrich with contact names
+    const raw = db.getThreadMessages(threadId);
+    const messages = raw.map(msg => {
+      const contact = db.getContact(msg.sender_email);
+      return {
+        ...msg,
+        sender_display_name: contact?.name
+          || msg.sender?.replace(/<.*>/, '').replace(/"/g, '').trim()
+          || msg.sender_email,
+        contact_role: contact?.role || null,
+      };
+    });
+
+    res.json({ thread_id: threadId, messages });
+  } catch (err) {
+    logger.error('Thread messages fetch failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/mail/thread/:threadId/suggest-reply', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const db = require('../db/database');
+    const messages = db.getThreadMessages(threadId);
+    if (!messages.length) return res.status(400).json({ error: 'No messages loaded yet — call GET /messages first' });
+
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.status(400).json({ error: 'ANTHROPIC_API_KEY not set' });
+    }
+
+    const thread = db.getDb().prepare('SELECT * FROM threads WHERE thread_id = ?').get(threadId);
+    const conversation = messages.slice(-6).map(m =>
+      `[${m.is_from_me ? 'Yo' : m.sender}] ${(m.body_text || '').substring(0, 500)}`
+    ).join('\n\n');
+
+    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const msg = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 400,
+      messages: [{
+        role: 'user',
+        content: `Eres Alejandro, CEO de ClickRepuestos / WebySEO.
+Redacta una respuesta profesional y concisa (máx 3 párrafos) para este hilo de email con cliente.
+
+Asunto: ${thread?.subject || ''}
+Cliente: ${thread?.client_name || ''}
+
+Conversación reciente:
+${conversation}
+
+Responde SOLO con el cuerpo del email, sin asunto ni firma.`,
+      }],
+    });
+
+    const draft = msg.content[0].text.trim();
+    const saved = db.saveDraft(threadId, draft, 'reply', true);
+    res.json({ draft, draft_id: saved.id });
+  } catch (err) {
+    logger.error('Suggest reply failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/mail/thread/:threadId/reply', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const { body, to, subject } = req.body;
+    if (!body) return res.status(400).json({ error: 'body required' });
+
+    const gmail = require('../mcp/gmail');
+    await gmail.sendReply(to, subject, body, threadId);
+
+    const db = require('../db/database');
+    db.logAction(threadId, 'reply_sent', { to, subject });
+
+    const lastDraftId = db.getLastDraftId(threadId);
+    if (lastDraftId) db.markDraftSent(lastDraftId);
+
+    res.json({ success: true, thread_id: threadId });
+  } catch (err) {
+    logger.error('Reply send failed', { error: err.message });
     res.status(500).json({ error: err.message });
   }
 });
@@ -399,6 +549,359 @@ router.post('/task-bridge/sync-jira', async (req, res) => {
     const taskBridge = require('../skills/task-bridge');
     const result = await taskBridge.syncJiraTasks();
     res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Feedback loop ───────────────────────────────────────────────────────────
+
+router.post('/mail/thread/:threadId/feedback', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const { correct_category, correct_estado, explanation } = req.body;
+    if (!correct_category || !explanation) {
+      return res.status(400).json({ error: 'correct_category and explanation required' });
+    }
+
+    const db = require('../db/database');
+    const thread = db.getDb().prepare('SELECT * FROM threads WHERE thread_id = ?').get(threadId);
+    if (!thread) return res.status(404).json({ error: 'Thread not found' });
+
+    // 1. Save feedback record
+    const feedbackResult = db.saveFeedback({
+      thread_id:         threadId,
+      original_category: thread.category,
+      original_estado:   thread.estado,
+      original_severity: thread.severity,
+      correct_category,
+      correct_estado:    correct_estado || 'informativo',
+      correct_severity:  correct_estado === 'informativo' ? 'none' : (thread.severity || 'low'),
+      ceo_explanation:   explanation,
+    });
+
+    // 2. Extract rule with Claude Haiku
+    let ruleData = null;
+    if (process.env.ANTHROPIC_API_KEY) {
+      try {
+        const { default: Anthropic } = await import('@anthropic-ai/sdk');
+        const ai = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+        const response = await ai.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 300,
+          messages: [{
+            role: 'user',
+            content: `Eres un sistema de aprendizaje para un clasificador de correos empresariales.
+El CEO corrigió una clasificación errónea. Extrae UNA regla generalizable.
+
+CORREO:
+- Asunto: "${thread.subject}"
+- Remitente: "${thread.last_from}"
+- Cliente: "${thread.client_name || 'N/A'}"
+- Jarvis clasificó como: ${thread.category} / ${thread.estado}
+- Debería ser: ${correct_category} / ${correct_estado || 'informativo'}
+- Explicación del CEO: "${explanation}"
+
+Responde SOLO con JSON (sin markdown, sin backticks):
+{
+  "pattern_type": "subject",
+  "pattern_value": "texto clave genérico a buscar en el asunto",
+  "explanation_for_ceo": "Explicación en español en primera persona (soy Jarvis) de qué entendí y qué haré. Máx 2 oraciones.",
+  "confidence": "high"
+}
+
+Reglas para el pattern_value: debe ser genérico (ej: "Factura N°" no "Factura N°375").
+pattern_type puede ser "subject", "from", o "subject+from".`,
+          }],
+        });
+        const raw = response.content[0].text.replace(/```json|```/g, '').trim();
+        ruleData = JSON.parse(raw);
+      } catch (e) {
+        logger.debug('Rule extraction fallback', { error: e.message });
+      }
+    }
+
+    if (!ruleData) {
+      ruleData = {
+        pattern_type:        'subject',
+        pattern_value:       (thread.subject || '').substring(0, 30),
+        explanation_for_ceo: `Entendí que correos con "${(thread.subject || '').substring(0, 30)}" deben clasificarse como ${correct_category}.`,
+        confidence:          'low',
+      };
+    }
+
+    // 3. Apply correction to THIS thread immediately
+    const newSeverity = correct_estado === 'informativo' ? 'none' : (thread.severity || 'low');
+    db.getDb().prepare(`
+      UPDATE threads SET category = ?, estado = ?, severity = ?, is_informativo = ?, updated_at = datetime('now')
+      WHERE thread_id = ?
+    `).run(correct_category, correct_estado || 'informativo', newSeverity,
+           correct_estado === 'informativo' ? 1 : 0, threadId);
+
+    // 4. Find other threads that would match (but DON'T apply yet)
+    const allActive = db.getActiveThreads();
+    const wouldMatch = allActive
+      .filter(t => t.thread_id !== threadId
+               && !['solucionado','archivado','en_jira'].includes(t.estado)
+               && t.subject?.toLowerCase().includes(ruleData.pattern_value.toLowerCase()))
+      .map(t => ({
+        thread_id:     t.thread_id,
+        subject:       t.subject,
+        client_name:   t.client_name,
+        current_estado: t.estado,
+      }));
+
+    db.logAction(threadId, 'feedback_proposed', { correct_category, correct_estado, rule: ruleData.pattern_value });
+    logger.info('Feedback proposed', { threadId, rule: ruleData.pattern_value, wouldAffect: wouldMatch.length });
+
+    res.json({
+      success:              true,
+      feedback_id:          feedbackResult.id,
+      current_thread_fixed: true,
+      proposed_rule: {
+        pattern_type:        ruleData.pattern_type,
+        pattern_value:       ruleData.pattern_value,
+        correct_category,
+        correct_estado:      correct_estado || 'informativo',
+        explanation_for_ceo: ruleData.explanation_for_ceo,
+        confidence:          ruleData.confidence,
+      },
+      would_affect:       wouldMatch,
+      would_affect_count: wouldMatch.length,
+      needs_confirmation:  true,
+    });
+  } catch (err) {
+    logger.error('Feedback failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/mail/feedback/confirm', (req, res) => {
+  try {
+    const { feedback_id, proposed_rule, apply_to_existing } = req.body;
+    if (!feedback_id || !proposed_rule) {
+      return res.status(400).json({ error: 'feedback_id and proposed_rule required' });
+    }
+
+    const db = require('../db/database');
+
+    // 1. Save learned rule
+    const ruleResult = db.saveLearnedRule({
+      pattern_type:       proposed_rule.pattern_type,
+      pattern_value:      proposed_rule.pattern_value,
+      correct_category:   proposed_rule.correct_category,
+      correct_estado:     proposed_rule.correct_estado,
+      correct_severity:   proposed_rule.correct_estado === 'informativo' ? 'none' : 'low',
+      source_feedback_id: feedback_id,
+    });
+
+    // 2. Retroactively apply if confirmed
+    let reclassified = 0;
+    if (apply_to_existing) {
+      const allActive = db.getActiveThreads();
+      const newSev = proposed_rule.correct_estado === 'informativo' ? 'none' : 'low';
+      const isInfo = proposed_rule.correct_estado === 'informativo' ? 1 : 0;
+      const stmt = db.getDb().prepare(`
+        UPDATE threads SET
+          category = ?, estado = ?, severity = ?, is_informativo = ?, updated_at = datetime('now')
+        WHERE thread_id = ? AND estado NOT IN ('solucionado','archivado','en_jira')
+      `);
+      for (const t of allActive) {
+        if (t.subject?.toLowerCase().includes(proposed_rule.pattern_value.toLowerCase())) {
+          stmt.run(proposed_rule.correct_category, proposed_rule.correct_estado, newSev, isInfo, t.thread_id);
+          reclassified++;
+        }
+      }
+    }
+
+    db.logAction('system', 'rule_confirmed', {
+      rule_id:    ruleResult.id,
+      pattern:    proposed_rule.pattern_value,
+      reclassified,
+    });
+    logger.info('Rule confirmed', { ruleId: ruleResult.id, pattern: proposed_rule.pattern_value, reclassified });
+
+    res.json({
+      success:           true,
+      rule_id:           ruleResult.id,
+      reclassified_count: reclassified,
+      message: reclassified > 0
+        ? `Regla guardada. ${reclassified} correo(s) reclasificado(s).`
+        : 'Regla guardada. Se aplicará a correos futuros.',
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/mail/learned-rules', (req, res) => {
+  try {
+    const db = require('../db/database');
+    res.json({
+      rules: db.getAllLearnedRules(),
+      feedback_history: db.getFeedbackHistory(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Investigar correo ausente ───────────────────────────────────────────────
+
+router.post('/mail/investigate', async (req, res) => {
+  try {
+    const { search_query, from_email, subject_fragment } = req.body;
+    if (!search_query && !from_email && !subject_fragment) {
+      return res.status(400).json({ error: 'Provide search_query, from_email, or subject_fragment' });
+    }
+
+    const gmail = require('../mcp/gmail');
+    const db    = require('../db/database');
+    const yaml  = require('js-yaml');
+    const fs    = require('fs');
+    const rules = yaml.load(fs.readFileSync(path.join(__dirname, '../../config/rules.yml'), 'utf8'));
+    const clientsConfig = yaml.load(fs.readFileSync(path.join(__dirname, '../../config/clients.yml'), 'utf8'));
+
+    let query = search_query || '';
+    if (from_email)       query = `from:${from_email} ${query}`.trim();
+    if (subject_fragment) query = `subject:(${subject_fragment}) ${query}`.trim();
+    query += ' newer_than:30d';
+
+    const threads = await gmail.searchThreads(query, 10);
+
+    if (!threads.length) {
+      return res.json({
+        found: false,
+        message: 'No se encontraron correos con esos criterios en los últimos 30 días.',
+        suggestions: [
+          'Verifica el email del remitente',
+          'Intenta con menos palabras en la búsqueda',
+          'El correo podría estar en una cuenta diferente',
+        ],
+      });
+    }
+
+    const sqlDb = db.getDb();
+    const analysis = threads.map(t => {
+      const reasons = [];
+      const inDb = sqlDb.prepare('SELECT estado FROM threads WHERE thread_id = ?').get(t.id);
+
+      reasons.push({
+        check: 'En base de datos',
+        result: inDb ? `Sí — estado: ${inDb.estado}` : 'No — nunca fue escaneado',
+        is_issue: !inDb,
+      });
+
+      const fromEmail  = (t.from?.match(/[a-zA-Z0-9._%+-]+@[\w.-]+/) || [''])[0].toLowerCase();
+      const fromDomain = fromEmail.split('@')[1] || '';
+      let clientMatch = null;
+      for (const c of clientsConfig.clients) {
+        if (c.domains.some(d => fromDomain === d || fromDomain.endsWith('.' + d))
+          || c.contacts?.some(e => e.toLowerCase() === fromEmail)) {
+          clientMatch = c.name; break;
+        }
+      }
+      // Also check participants
+      if (!clientMatch) {
+        for (const email of (t.participants || [])) {
+          const d = email.split('@')[1] || '';
+          for (const c of clientsConfig.clients) {
+            if (c.domains.some(cd => d === cd || d.endsWith('.' + cd))) { clientMatch = c.name; break; }
+          }
+          if (clientMatch) break;
+        }
+      }
+
+      reasons.push({
+        check: 'Match con clients.yml',
+        result: clientMatch ? `Sí — ${clientMatch}` : `No — dominio "${fromDomain}" no registrado`,
+        is_issue: !clientMatch,
+      });
+
+      const excluded = (rules.mail?.exclude_patterns || []).some(p =>
+        t.subject?.toLowerCase().includes(p.toLowerCase()));
+      if (excluded) reasons.push({ check: 'Excluido por regla', result: 'Sí — matchea exclude_patterns', is_issue: true });
+
+      const isSpam = (rules.mail?.spam_domains || []).some(d => fromDomain.includes(d));
+      if (isSpam) reasons.push({ check: 'Dominio en spam_domains', result: 'Bloqueado como spam', is_issue: true });
+
+      const noAction = (rules.mail?.no_action_patterns || []).some(p =>
+        t.subject?.toLowerCase().includes(p.toLowerCase()));
+      if (noAction) reasons.push({ check: 'Patrón no-action', result: 'Clasificado como informativo (sin acción requerida)', is_issue: false });
+
+      return {
+        thread_id:    t.id,
+        subject:      t.subject,
+        from:         t.from,
+        date:         t.date,
+        message_count: t.message_count,
+        in_dashboard: !!inDb && !['archivado','solucionado'].includes(inDb?.estado),
+        client_match: clientMatch,
+        current_estado: inDb?.estado || null,
+        analysis:     reasons,
+        action_needed: reasons.some(r => r.is_issue),
+        gmail_link:   `https://mail.google.com/mail/u/0/#inbox/${t.id}`,
+      };
+    });
+
+    res.json({
+      found:   true,
+      total:   analysis.length,
+      threads: analysis,
+      message: analysis.some(a => a.action_needed)
+        ? 'Se encontraron correos con problemas de clasificación'
+        : 'Todos los correos encontrados están clasificados correctamente',
+    });
+  } catch (err) {
+    logger.error('Investigation failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/mail/investigate/add', async (req, res) => {
+  try {
+    const { thread_id } = req.body;
+    if (!thread_id) return res.status(400).json({ error: 'thread_id required' });
+
+    // Re-run a single-thread scan by forcing a fresh classifyClientThreads pass
+    // We do this by temporarily clearing the hash so the thread is re-processed
+    const db = require('../db/database');
+    db.getDb().prepare(`UPDATE threads SET content_hash = '' WHERE thread_id = ?`).run(thread_id);
+
+    const mailOps = require('../skills/mail-ops');
+    await mailOps.classifyClientThreads({ mode: 'incremental', days: 30 });
+
+    const thread = db.getDb().prepare('SELECT * FROM threads WHERE thread_id = ?').get(thread_id);
+    if (!thread) return res.status(404).json({ error: 'Thread not found after rescan — domain may not be in clients.yml' });
+
+    db.logAction(thread_id, 'manually_added', { source: 'investigation' });
+    res.json({ success: true, thread_id, estado: thread.estado, message: 'Thread re-escaneado y agregado al dashboard' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Contactos ───────────────────────────────────────────────────────────────
+
+router.get('/contacts', (req, res) => {
+  try {
+    const db = require('../db/database');
+    const { client } = req.query;
+    const contacts = client ? db.getContactsByClient(client) : db.getAllContacts();
+    res.json({ contacts });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/contacts/:email', (req, res) => {
+  try {
+    const db = require('../db/database');
+    const email = decodeURIComponent(req.params.email);
+    const { name, role, client_name, phone, notes } = req.body;
+    db.upsertContact(email, { name, role, client_name, phone, notes });
+    const updated = db.getContact(email);
+    res.json({ success: true, contact: updated });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -1010,3 +1010,313 @@ html, body, #root { height: 100%; background: var(--bg); color: var(--text); fon
 .agenda-dw-icon     { color: var(--green); font-size: 12px; }
 .agenda-dw-range    { font-size: 12px; font-weight: 600; color: var(--green); }
 .agenda-dw-duration { font-size: 11px; color: var(--green); margin-left: auto; opacity: .8; }
+
+/* ─── Thread Accordion (Phase 3) ─────────────────────────────────────────── */
+.ctl-row-expanded { border-color: var(--blue); }
+.ctl-expand-icon  { font-size: 9px; color: var(--muted); flex-shrink: 0; margin-left: 4px; }
+
+.ctl-row-summary  { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.ctl-row-summary:hover { background: rgba(255,255,255,.02); border-radius: 4px; }
+
+.ctl-accordion {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 8px;
+}
+
+/* ── Messages ── */
+.thread-messages {
+  display: flex; flex-direction: column; gap: 0;
+  max-height: 420px; overflow-y: auto;
+  padding: 4px 0 8px;
+}
+.thread-loading {
+  font-size: 12px; color: var(--muted); padding: 8px 0; text-align: center;
+}
+.thread-message {
+  padding: 12px 14px; border-radius: 6px;
+  margin-bottom: 8px; font-size: 12px; line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word;
+}
+.thread-message.from-client {
+  background: #0d1f1a; border-left: 3px solid #5dcaa5;
+}
+.thread-message.from-me {
+  background: #14161f; border-left: 3px solid #3b82f6;
+}
+.msg-header {
+  display: flex; align-items: baseline; gap: 6px;
+  margin-bottom: 8px; flex-wrap: wrap;
+}
+.sender-client { font-size: 12px; font-weight: 600; color: #5dcaa5; }
+.sender-me     { font-size: 12px; font-weight: 600; color: #85b7eb; }
+.sender-email  { font-size: 11px; color: #73726c; }
+.msg-date      { font-size: 11px; color: #73726c; margin-left: auto; }
+.msg-body      { color: #c2c0b6; font-size: 12px; line-height: 1.6; }
+
+.show-more-btn {
+  display: block; width: 100%; padding: 8px;
+  background: transparent; border: 1px dashed #2a2d37;
+  border-radius: 6px; color: #73726c; font-size: 11px;
+  cursor: pointer; margin-bottom: 8px; text-align: center;
+  font-family: var(--font);
+}
+.show-more-btn:hover { background: #1a1d27; color: #9c9a92; border-color: #3a3d47; }
+
+.thread-snippet-fallback {
+  font-size: 12px; color: var(--muted); font-style: italic;
+  padding: 8px 0;
+}
+
+/* ── Reply area ── */
+.reply-area { margin-top: 10px; }
+
+.reply-to-header {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-size: 11px; margin-bottom: 6px;
+  padding: 6px 10px; background: rgba(255,255,255,.03);
+  border-radius: 5px; border: 1px solid var(--border);
+}
+.reply-to-label   { color: var(--muted); font-weight: 700; flex-shrink: 0; }
+.reply-to-email   { color: #85b7eb; font-weight: 600; }
+.reply-to-name    { color: var(--muted); }
+.reply-to-subject { color: var(--muted); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
+
+.reply-input {
+  width: 100%; background: rgba(255,255,255,.04); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-family: var(--font); font-size: 12px;
+  padding: 8px 10px; resize: vertical; min-height: 72px;
+}
+.reply-input:focus { outline: none; border-color: var(--blue); }
+.reply-input::placeholder { color: var(--muted); }
+
+.reply-actions {
+  display: flex; gap: 6px; margin-top: 6px;
+}
+.ctl-btn-suggest {
+  background: rgba(155,114,240,.15); color: #c4a9f9; border: 1px solid rgba(155,114,240,.3);
+}
+.ctl-btn-suggest:hover:not(:disabled) { background: rgba(155,114,240,.25); }
+.ctl-btn-send {
+  background: rgba(34,197,94,.15); color: var(--green); border: 1px solid rgba(34,197,94,.3);
+}
+.ctl-btn-send:hover:not(:disabled) { background: rgba(34,197,94,.25); }
+.ctl-btn-send:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ── Action bar ── */
+.action-bar {
+  display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px;
+  padding-top: 8px; border-top: 1px solid var(--border);
+}
+.ctl-btn-resolve {
+  background: rgba(34,197,94,.12); color: var(--green); border: 1px solid rgba(34,197,94,.25);
+}
+.ctl-btn-resolve:hover { background: rgba(34,197,94,.22); }
+.ctl-btn-resolve-confirm {
+  background: rgba(34,197,94,.2); color: var(--green); border: 1px solid rgba(34,197,94,.4);
+}
+.ctl-btn-cancel {
+  background: rgba(255,255,255,.05); color: var(--muted); border: 1px solid var(--border);
+}
+
+.resolve-form {
+  display: flex; gap: 6px; align-items: center; flex: 1;
+}
+.resolve-input {
+  flex: 1; background: rgba(255,255,255,.04); border: 1px solid var(--border);
+  border-radius: 4px; color: var(--text); font-family: var(--font); font-size: 11px;
+  padding: 4px 8px;
+}
+.resolve-input:focus { outline: none; border-color: var(--green); }
+.resolve-input::placeholder { color: var(--muted); }
+
+/* ── Resolved badge ── */
+.ctl-badge-resolved { background: rgba(34,197,94,.15); color: var(--green); }
+
+/* ─── Feedback Modal (Phase 4) ───────────────────────────────────────────── */
+.fb-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0,0,0,.65); backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+}
+.fb-modal {
+  background: #13161f; border: 1px solid var(--border);
+  border-radius: 10px; width: 480px; max-width: calc(100vw - 32px);
+  box-shadow: 0 20px 60px rgba(0,0,0,.6);
+  padding: 20px;
+}
+.fb-header {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;
+}
+.fb-title   { font-size: 14px; font-weight: 700; color: var(--text); }
+.fb-close   { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; line-height: 1; }
+.fb-close:hover { color: var(--text); }
+
+.fb-thread-info   { background: rgba(255,255,255,.04); border-radius: 6px; padding: 10px 12px; margin-bottom: 14px; }
+.fb-thread-subject{ font-size: 12px; color: var(--text); margin-bottom: 4px; }
+.fb-thread-meta   { font-size: 11px; color: var(--muted); }
+.fb-original      { color: #f87171; font-weight: 600; }
+
+.fb-section-label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+
+.fb-options       { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+.fb-option {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 8px 10px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); transition: border-color .15s;
+}
+.fb-option:hover           { border-color: rgba(255,255,255,.15); }
+.fb-option.selected        { border-color: var(--blue); background: rgba(74,143,217,.08); }
+.fb-option input[type=radio] { margin-top: 2px; flex-shrink: 0; accent-color: var(--blue); }
+.fb-option-text            { display: flex; flex-direction: column; gap: 2px; }
+.fb-option-label           { font-size: 12px; font-weight: 600; color: var(--text); }
+.fb-option-desc            { font-size: 11px; color: var(--muted); }
+
+.fb-explanation {
+  width: 100%; background: rgba(255,255,255,.04); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-family: var(--font); font-size: 12px;
+  padding: 8px 10px; resize: vertical; min-height: 64px; margin-bottom: 14px;
+}
+.fb-explanation:focus { outline: none; border-color: var(--blue); }
+.fb-explanation::placeholder { color: var(--muted); }
+
+.fb-error  { font-size: 11px; color: #f87171; margin-bottom: 10px; }
+
+.fb-footer { display: flex; justify-content: flex-end; gap: 8px; }
+.fb-btn    { padding: 7px 14px; border-radius: 5px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid transparent; }
+.fb-btn:disabled { opacity: .4; cursor: not-allowed; }
+.fb-btn-cancel  { background: rgba(255,255,255,.05); border-color: var(--border); color: var(--muted); }
+.fb-btn-cancel:hover:not(:disabled) { background: rgba(255,255,255,.08); }
+.fb-btn-primary { background: rgba(74,143,217,.2); border-color: var(--blue); color: #93c5fd; }
+.fb-btn-primary:hover:not(:disabled) { background: rgba(74,143,217,.3); }
+
+.fb-result       { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
+.fb-result-row   { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text); }
+.fb-check        { color: var(--green); font-size: 14px; flex-shrink: 0; }
+.fb-confidence   { font-size: 9px; font-weight: 700; padding: 2px 5px; border-radius: 3px; margin-left: 4px; }
+.fb-conf-high    { background: rgba(34,197,94,.15); color: var(--green); }
+.fb-conf-medium  { background: rgba(245,158,11,.15); color: #fbbf24; }
+.fb-conf-low     { background: rgba(255,255,255,.08); color: var(--muted); }
+
+/* ─── Corregir button ────────────────────────────────────────────────────── */
+.ctl-btn-feedback {
+  background: rgba(155,114,240,.1); color: #c4a9f9;
+  border: 1px solid rgba(155,114,240,.25);
+}
+.ctl-btn-feedback:hover { background: rgba(155,114,240,.2); }
+
+/* ─── Informativo row ────────────────────────────────────────────────────── */
+.ctl-row-informativo { opacity: .65; }
+.ctl-row-informativo:hover { opacity: .85; }
+.ctl-badge-info { background: rgba(90,100,128,.2); color: var(--muted); }
+
+/* ─── Investigate panel ──────────────────────────────────────────────────── */
+.ctl-btn-investigate {
+  background: rgba(255,255,255,.05); border: 1px solid var(--border);
+  color: var(--muted); font-size: 11px; font-weight: 600; margin-left: auto;
+  padding: 4px 10px; border-radius: 4px; cursor: pointer;
+}
+.ctl-btn-investigate:hover { background: rgba(255,255,255,.08); color: var(--text); }
+.ctl-header { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+
+.investigate-panel {
+  background: rgba(255,255,255,.03); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px; margin-bottom: 14px;
+}
+.investigate-header {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;
+}
+.investigate-title { font-size: 12px; font-weight: 700; color: var(--text); }
+.investigate-close {
+  background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; line-height: 1;
+}
+.investigate-close:hover { color: var(--text); }
+
+.investigate-search { display: flex; gap: 6px; margin-bottom: 10px; }
+.investigate-input  {
+  flex: 1; background: rgba(255,255,255,.05); border: 1px solid var(--border);
+  border-radius: 5px; color: var(--text); font-family: var(--font); font-size: 12px;
+  padding: 6px 10px;
+}
+.investigate-input:focus { outline: none; border-color: var(--blue); }
+.investigate-input::placeholder { color: var(--muted); }
+
+.investigate-not-found { font-size: 12px; }
+.investigate-msg       { color: var(--muted); margin-bottom: 6px; }
+.investigate-suggestion{ color: var(--muted); font-size: 11px; margin-left: 8px; }
+
+.investigate-results { display: flex; flex-direction: column; gap: 8px; }
+.investigate-row     {
+  background: rgba(255,255,255,.02); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px;
+}
+.investigate-row.has-issue { border-color: rgba(248,113,113,.3); }
+
+.investigate-row-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.investigate-icon       { font-size: 13px; flex-shrink: 0; }
+.investigate-icon.ok    { color: var(--green); }
+.investigate-icon.issue { color: #f87171; }
+.investigate-subject    { font-size: 12px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.investigate-gmail-link { font-size: 10px; color: var(--blue); text-decoration: none; flex-shrink: 0; }
+.investigate-gmail-link:hover { text-decoration: underline; }
+
+.investigate-checks { display: flex; flex-direction: column; gap: 3px; }
+.investigate-check  { display: flex; gap: 6px; font-size: 11px; }
+.check-ok           { color: var(--muted); }
+.check-issue        { color: #fca5a5; }
+.investigate-hint   { font-size: 11px; color: var(--muted); margin-top: 6px; font-style: italic; }
+.investigate-hint code { background: rgba(255,255,255,.08); padding: 1px 4px; border-radius: 3px; font-size: 10px; }
+
+/* ─── Inline contact name editing ─────────────────────────────────────────── */
+.edit-name-btn {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 10px; padding: 0 3px;
+  opacity: 0; transition: opacity .15s;
+  vertical-align: middle;
+}
+.thread-message:hover .edit-name-btn { opacity: 1; }
+
+.edit-name-inline { display: inline-flex; align-items: center; gap: 4px; }
+.edit-name-input  {
+  background: rgba(255,255,255,.08); border: 1px solid var(--blue);
+  border-radius: 4px; color: var(--text); font-size: 11px;
+  padding: 2px 6px; outline: none; max-width: 160px;
+}
+.edit-name-save, .edit-name-cancel {
+  background: none; border: none; cursor: pointer;
+  font-size: 11px; padding: 2px 4px; border-radius: 3px;
+  line-height: 1;
+}
+.edit-name-save   { color: var(--green); }
+.edit-name-cancel { color: #f87171; }
+.edit-name-save:hover   { background: rgba(93,202,165,.15); }
+.edit-name-cancel:hover { background: rgba(248,113,113,.15); }
+
+/* ─── FeedbackModal: confirm phase ────────────────────────────────────────── */
+.fb-confirm-box {
+  background: rgba(59,130,246,.08); border: 1px solid rgba(59,130,246,.2);
+  border-radius: 8px; padding: 12px 14px; margin-bottom: 12px;
+}
+.fb-confirm-title   { font-size: 11px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }
+.fb-confirm-rule    { font-size: 13px; color: var(--text); }
+.fb-arrow           { color: var(--muted); margin: 0 4px; }
+.fb-confirm-estado  { color: var(--blue); font-weight: 600; }
+.fb-confirm-explanation { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+
+.fb-affects         { margin-bottom: 12px; }
+.fb-affects-title   { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.fb-affects-list    { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.fb-affects-item    { display: flex; justify-content: space-between; align-items: center; padding: 5px 8px;
+                      background: rgba(255,255,255,.03); border-radius: 4px; gap: 8px; }
+.fb-affects-subject { font-size: 11px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.fb-affects-client  { font-size: 10px; color: var(--muted); flex-shrink: 0; }
+.fb-affects-more    { font-size: 11px; color: var(--muted); padding: 3px 8px; }
+
+.fb-footer-confirm  { gap: 6px; flex-wrap: wrap; }
+.fb-btn-secondary {
+  background: rgba(255,255,255,.05); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 7px 14px; font-size: 12px; cursor: pointer;
+  font-family: var(--font); transition: background .15s;
+}
+.fb-btn-secondary:hover { background: rgba(255,255,255,.1); }

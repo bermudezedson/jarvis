@@ -5,8 +5,35 @@ briefing:
   evening_cron: "0 18 * * 1-5"     # Lunes a viernes 6:00 PM
   refresh_interval_minutes: 5
 
+team:
+  # Dominios del equipo — Jarvis los trata como "nosotros" (no solo el CEO)
+  domains:
+    - "clickrepuestos.cl"
+    - "webyseo.cl"
+  # Emails específicos del CEO (para distinguir CEO respondió vs equipo respondió)
+  ceo_emails:
+    - "alejandro@webyseo.cl"
+    - "alejandro@clickrepuestos.cl"
+    - "hablemos@clickrepuestos.cl"
+
 mail:
   safe_mode: true
+
+  # Patrones en el subject que indican que el correo NO requiere acción del CEO
+  # aunque involucre un cliente. Se marcan como estado "informativo".
+  no_action_patterns:
+    - "Factura N°"
+    - "Factura N "
+    - "Factura de servicios"
+    - "Envío de Factura"
+    - "Certificado SSL"
+    - "Duplicator"
+    - "Weekly Duplicator"
+    - "Advertencia del uso del disco"
+    - "cPanel"
+    - "Renovación de Hosting"
+    - "Pago recibido"
+    - "Confirmación de pago"
 
   # Patrones de asunto o remitente que se excluyen ANTES de clasificar.
   # Ideal para correos internos de ERP, notificaciones de sistema, etc.
