@@ -84,12 +84,9 @@ export default function FeedbackModal({ thread, onClose, onFeedbackSent }) {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
-          proposed_rule:       proposed.proposed_rule,
-          correct_estado:      category,
-          correct_category:    category,
-          apply_retroactively: applyToAll,
-          source_thread_id:    thread.thread_id,
-          explanation,
+          feedback_id:      proposed.feedback_id,
+          proposed_rule:    proposed.proposed_rule,
+          apply_to_existing: applyToAll,
         }),
       });
       const data = await res.json();
