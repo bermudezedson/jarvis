@@ -2,7 +2,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const logger = require('../utils/logger');
 
-const DB_PATH = path.join(__dirname, '../../../data/jarvis.db');
+const DB_PATH = path.join(__dirname, '../../data/jarvis.db');
 
 let _db = null;
 
