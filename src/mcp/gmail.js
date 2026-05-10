@@ -179,6 +179,16 @@ async function createDraft(to, subject, body, replyToMessageId) {
   return gmail('POST', '/drafts', payload);
 }
 
+// Mark a thread as phishing/spam — moves out of INBOX and signals Google
+async function reportPhishing(threadId) {
+  logger.info('Reporting phishing', { skill: SKILL, threadId });
+  // SPAM label = Google learns it's spam; removing INBOX moves it out
+  return gmail('POST', `/threads/${threadId}/modify`, {
+    addLabelIds: ['SPAM'],
+    removeLabelIds: ['INBOX'],
+  });
+}
+
 async function healthCheck() {
   try {
     const profile = await gmail('GET', '/profile');
@@ -193,5 +203,5 @@ async function healthCheck() {
 module.exports = {
   getUnreadThreads, getSentEmails, searchThreads, getThread,
   listLabels, applyLabel, removeLabel, createLabel, createDraft,
-  healthCheck,
+  reportPhishing, healthCheck,
 };

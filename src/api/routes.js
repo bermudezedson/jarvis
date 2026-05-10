@@ -70,14 +70,127 @@ router.get('/config/clients', (req, res) => {
 
 // ─── Phase 2 endpoints ────────────────────────────────────────────────────────
 
+// ─── Mail inbox ───────────────────────────────────────────────────────────────
+
+router.get('/mail/inbox', (req, res) => {
+  const data = cache.read('mail-classifications.json');
+  if (!data) return res.json({ classified: false, message: 'Run POST /mail/classify first' });
+  res.json(data);
+});
+
 router.post('/mail/classify', async (req, res) => {
   try {
-    const { hours = 24 } = req.body;
+    const { hours = 48 } = req.body;
     const mailOps = require('../skills/mail-ops');
     const result = await mailOps.classify(hours);
     res.json(result);
   } catch (err) {
     logger.error('Mail classify failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/mail/approve', async (req, res) => {
+  try {
+    const { thread_id, action } = req.body; // action: 'approve' | 'reject'
+    if (!thread_id || !action) return res.status(400).json({ error: 'thread_id and action required' });
+    const data = cache.read('mail-classifications.json');
+    if (!data) return res.status(404).json({ error: 'No classifications found' });
+    const item = data.items.find(i => i.thread_id === thread_id);
+    if (!item) return res.status(404).json({ error: 'Thread not found' });
+    item.aprobado = action === 'approve';
+    cache.write('mail-classifications.json', data);
+    res.json({ success: true, thread_id, aprobado: item.aprobado });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/mail/approve-all', async (req, res) => {
+  try {
+    const { category, action } = req.body;
+    const data = cache.read('mail-classifications.json');
+    if (!data) return res.status(404).json({ error: 'No classifications found' });
+    let count = 0;
+    data.items.forEach(i => {
+      if (!category || i.category === category) {
+        i.aprobado = action !== 'reject';
+        count++;
+      }
+    });
+    cache.write('mail-classifications.json', data);
+    res.json({ success: true, updated: count });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/mail/report-phishing', async (req, res) => {
+  try {
+    const { thread_id } = req.body;
+    if (!thread_id) return res.status(400).json({ error: 'thread_id required' });
+
+    const data = cache.read('mail-classifications.json');
+    if (!data) return res.status(404).json({ error: 'No classifications found' });
+    const item = data.items.find(i => i.thread_id === thread_id);
+    if (!item) return res.status(404).json({ error: 'Thread not found' });
+
+    // 1. Report to Gmail (marks as SPAM, removes from INBOX — same as "Denunciar phishing")
+    const gmail = require('../mcp/gmail');
+    await gmail.reportPhishing(thread_id);
+    logger.info('Phishing reported to Gmail', { thread_id, from: item.from });
+
+    // 2. Auto-blacklist sender domain in rules.yml so Jarvis catches it from now on
+    const rulesPath = path.join(__dirname, '../../config/rules.yml');
+    const rules = yaml.load(fs.readFileSync(rulesPath, 'utf8'));
+    const domainMatch = item.from?.match(/@([\w.-]+)/);
+    let addedDomain = null;
+    if (domainMatch) {
+      const domain = domainMatch[1].toLowerCase();
+      if (!rules.mail.spam_domains.includes(domain)) {
+        rules.mail.spam_domains.push(domain);
+        fs.writeFileSync(rulesPath, yaml.dump(rules, { lineWidth: 120 }));
+        addedDomain = domain;
+        logger.info('Domain blacklisted', { domain });
+      }
+    }
+
+    // 3. Mark as rejected in cache
+    item.aprobado = false;
+    cache.write('mail-classifications.json', data);
+
+    res.json({
+      success: true,
+      thread_id,
+      reported_to_gmail: true,
+      domain_blacklisted: addedDomain,
+      message: addedDomain
+        ? `Denunciado en Gmail · dominio ${addedDomain} bloqueado en Jarvis`
+        : 'Denunciado en Gmail',
+    });
+  } catch (err) {
+    logger.error('Phishing report failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/mail/reclassify', (req, res) => {
+  try {
+    const { thread_id, category } = req.body;
+    if (!thread_id || !category) return res.status(400).json({ error: 'thread_id and category required' });
+    const data = cache.read('mail-classifications.json');
+    if (!data) return res.status(404).json({ error: 'No classifications found' });
+    const item = data.items.find(i => i.thread_id === thread_id);
+    if (!item) return res.status(404).json({ error: 'Thread not found' });
+    item.category = category;
+    item.aprobado = null;  // reset decision
+    // Recount
+    const counts = {};
+    data.items.forEach(i => { counts[i.category] = (counts[i.category] || 0) + 1; });
+    data.by_category = counts;
+    cache.write('mail-classifications.json', data);
+    res.json({ success: true, thread_id, category });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

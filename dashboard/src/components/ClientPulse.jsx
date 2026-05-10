@@ -19,6 +19,21 @@ function ScoreBar({ score }) {
   );
 }
 
+const TIER_LABEL = { premium: 'Recurrente', standard: 'Anual', trial: 'Esporádico' };
+
+function EmpresaBadges({ empresa }) {
+  const list = Array.isArray(empresa) ? empresa : [empresa];
+  return (
+    <div className="cp-empresa-badges">
+      {list.map(e => (
+        <span key={e} className={`cp-empresa-badge ${e === 'ClickRepuestos' ? 'badge-cr' : 'badge-ws'}`}>
+          {e === 'ClickRepuestos' ? 'CR' : 'WS'}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function ClientRow({ client }) {
   const [expanded, setExpanded] = useState(false);
   const cfg = STATUS_CONFIG[client.status] || STATUS_CONFIG.unknown;
@@ -28,7 +43,8 @@ function ClientRow({ client }) {
       <div className="client-row-header" onClick={() => setExpanded(v => !v)}>
         <span className={`risk-dot ${cfg.dot}`} />
         <span className="client-name">{client.name}</span>
-        <span className={`tier-badge tier-${client.tier}`}>{client.tier}</span>
+        {client.empresa && <EmpresaBadges empresa={client.empresa} />}
+        <span className={`tier-badge tier-${client.tier}`}>{TIER_LABEL[client.tier] || client.tier}</span>
         <ScoreBar score={client.score} />
         <span className="client-status-label">{cfg.label}</span>
         <span className="expand-icon">{expanded ? '▲' : '▼'}</span>
@@ -36,14 +52,19 @@ function ClientRow({ client }) {
 
       {expanded && client.breakdown && (
         <div className="client-breakdown">
-          <BreakdownRow label="Último email" days={client.breakdown.last_email_age_days} score={client.breakdown.email_score} />
-          <BreakdownRow label="Última reunión" days={client.breakdown.last_meeting_age_days} score={client.breakdown.meeting_score} />
+          <BreakdownRow label="Último email"    days={client.breakdown.last_email_age_days}   score={client.breakdown.email_score} />
+          <BreakdownRow label="Última reunión"  days={client.breakdown.last_meeting_age_days} score={client.breakdown.meeting_score} />
           <div className="breakdown-row">
             <span className="bd-label">Tickets abiertos</span>
             <span className="bd-value">{client.breakdown.open_tickets}</span>
             <ScoreBar score={client.breakdown.ticket_score} />
           </div>
           {client.alert && <p className="client-alert">⚠ {client.alert}</p>}
+        </div>
+      )}
+      {expanded && !client.breakdown && client.alert && (
+        <div className="client-breakdown">
+          <p className="client-alert">⚠ {client.alert}</p>
         </div>
       )}
     </div>

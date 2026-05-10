@@ -44,8 +44,19 @@ async function calculatePulse() {
   return pulse;
 }
 
+// Derive a display tier from the billing frequency in clients.yml
+function deriveTier(client) {
+  const map = { recurrente: 'premium', anual: 'standard', esporadico: 'trial' };
+  return map[client.facturacion] || 'standard';
+}
+
+// empresa field can be a string or array — normalise to array
+function empresas(client) {
+  return Array.isArray(client.empresa) ? client.empresa : [client.empresa];
+}
+
 async function scoreClient(client) {
-  const weights = rules.clients.health_weights;
+  const weights  = rules.clients.health_weights;
   const staleDays = rules.clients.stale_contact_days;
 
   const [emailAgeDays, meetingAgeDays, openTickets] = await Promise.all([
@@ -54,37 +65,40 @@ async function scoreClient(client) {
     getOpenTicketCount(client),
   ]);
 
-  const emailScore = Math.max(0, 1 - emailAgeDays / staleDays);
+  const emailScore   = Math.max(0, 1 - emailAgeDays / staleDays);
   const meetingScore = Math.max(0, 1 - meetingAgeDays / staleDays);
   // 0 tickets = 1.0, 5+ tickets = 0.0
-  const ticketScore = Math.max(0, 1 - openTickets / 5);
-  // Placeholder: response time not yet tracked, default to 0.8 (good)
+  const ticketScore  = Math.max(0, 1 - openTickets / 5);
+  // Response time not yet tracked — default 0.8 (good)
   const responseScore = 0.8;
 
   const total = Math.round((
-    emailScore * weights.last_email +
-    meetingScore * weights.last_meeting +
-    ticketScore * weights.open_tickets +
+    emailScore   * weights.last_email    +
+    meetingScore * weights.last_meeting  +
+    ticketScore  * weights.open_tickets  +
     responseScore * weights.response_time
   ) * 100) / 100;
 
   const status = total >= 0.7 ? 'healthy' : total >= 0.4 ? 'at_risk' : 'critical';
 
   return {
-    name: client.name,
-    tier: client.tier,
-    score: total,
+    name:    client.name,
+    tier:    deriveTier(client),
+    empresa: empresas(client),
+    score:   total,
     status,
     breakdown: {
-      email_score: round2(emailScore),
-      meeting_score: round2(meetingScore),
-      ticket_score: round2(ticketScore),
-      response_score: round2(responseScore),
-      last_email_age_days: Math.round(emailAgeDays),
-      last_meeting_age_days: Math.round(meetingAgeDays),
-      open_tickets: openTickets,
+      email_score:            round2(emailScore),
+      meeting_score:          round2(meetingScore),
+      ticket_score:           round2(ticketScore),
+      response_score:         round2(responseScore),
+      last_email_age_days:    Math.round(emailAgeDays),
+      last_meeting_age_days:  Math.round(meetingAgeDays),
+      open_tickets:           openTickets,
     },
-    alert: status !== 'healthy' ? buildAlert(client, emailAgeDays, meetingAgeDays, openTickets, staleDays) : null,
+    alert: status !== 'healthy'
+      ? buildAlert(client, emailAgeDays, meetingAgeDays, openTickets, staleDays)
+      : null,
   };
 }
 
@@ -135,10 +149,11 @@ function buildAlert(client, emailAge, meetingAge, openTickets, staleDays) {
 
 function fallbackScore(client) {
   return {
-    name: client.name,
-    tier: client.tier,
-    score: null,
-    status: 'unknown',
+    name:    client.name,
+    tier:    deriveTier(client),
+    empresa: Array.isArray(client.empresa) ? client.empresa : [client.empresa],
+    score:   null,
+    status:  'unknown',
     breakdown: null,
     alert: 'Error al calcular — datos no disponibles',
   };
