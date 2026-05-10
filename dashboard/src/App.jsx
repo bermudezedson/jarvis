@@ -8,6 +8,7 @@ import RefreshIndicator from './components/RefreshIndicator';
 import CommitmentTracker from './components/CommitmentTracker';
 import ClientPulse from './components/ClientPulse';
 import MailClassifier from './components/MailClassifier';
+import MailStatusWidget from './components/MailStatusWidget';
 
 // ─── Iron Man face SVG ────────────────────────────────────────────────────────
 function IronManLogo() {
@@ -120,6 +121,12 @@ export default function App() {
                   <RiskRadar alerts={data.risk_radar || []} />
                 </section>
               </div>
+
+              {/* ── Mail Status — client threads with active lifecycle ── */}
+              <section className="zone zone-mail-status">
+                <h2 className="zone-title">Correos Pendientes con Clientes</h2>
+                <MailStatusWidget />
+              </section>
             </main>
           )}
         </>

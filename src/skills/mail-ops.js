@@ -26,15 +26,31 @@ const CATEGORIES = {
 
 // ─── Main classify function ───────────────────────────────────────────────────
 
+// ─── ERP / system noise filter ────────────────────────────────────────────────
+
+function shouldExclude(t) {
+  const patterns = rules.mail.exclude_patterns || [];
+  const subject  = (t.subject || '').toLowerCase();
+  const from     = (t.from    || '').toLowerCase();
+  return patterns.some(p => subject.includes(p.toLowerCase()) || from.includes(p.toLowerCase()));
+}
+
+// ─── Main classify function ───────────────────────────────────────────────────
+
 async function classify(hours = 48) {
   logger.info('Classifying emails', { skill: SKILL, hours });
   const gmail = require('../mcp/gmail');
   const threads = await gmail.getUnreadThreads(hours);
 
-  // Classify in parallel (but cap at 10 concurrent to avoid rate limits)
+  // Pre-filter: strip ERP / system noise before any classification
+  const filtered  = threads.filter(t => !shouldExclude(t));
+  const excluded  = threads.length - filtered.length;
+  if (excluded > 0) logger.info('Excluded system/ERP threads', { skill: SKILL, excluded });
+
+  // Classify in parallel (cap at 10 concurrent to avoid rate limits)
   const classified = [];
-  for (let i = 0; i < threads.length; i += 10) {
-    const batch = threads.slice(i, i + 10);
+  for (let i = 0; i < filtered.length; i += 10) {
+    const batch = filtered.slice(i, i + 10);
     const results = await Promise.all(batch.map(t => classifyThread(t)));
     classified.push(...results);
   }
@@ -49,12 +65,14 @@ async function classify(hours = 48) {
   }
 
   const result = {
-    classified_at: new Date().toISOString(),
-    hours_window: hours,
-    total: classified.length,
-    by_category: countByCategory(classified),
-    needs_action: classified.filter(c => needsAction(c)).length,
-    items: classified,
+    classified_at:  new Date().toISOString(),
+    hours_window:   hours,
+    total:          classified.length,
+    excluded:       excluded,
+    by_category:    countByCategory(classified),
+    by_estado:      countByEstado(classified),
+    needs_action:   classified.filter(c => needsAction(c)).length,
+    items:          classified,
   };
 
   cache.write('mail-classifications.json', result);
@@ -138,11 +156,18 @@ function build(t, category, severity, client, extra = {}) {
       empresa: client.empresa,
       jira_label: client.jira_label,
     } : null,
-    needs_action: needsActionFromCategory(category),
+    needs_action:    needsActionFromCategory(category),
     accion_sugerida: extra.accion || 'revisar',
-    jira_suggested: extra.jira_suggested || false,
-    ai_needed: extra.ai_needed || false,
-    aprobado: null,   // null = pendiente, true = aprobado, false = rechazado
+    jira_suggested:  extra.jira_suggested || false,
+    ai_needed:       extra.ai_needed || false,
+    aprobado:        null,   // null = pendiente, true = aprobado, false = rechazado
+    // ── Lifecycle state ──────────────────────────────────────────────────────
+    // pendiente          → not yet acted upon
+    // esperando_cliente  → we replied, ball is in client's court
+    // esperando_nosotros → client replied, we need to act
+    // en_jira            → escalated to a Jira task
+    // archivado          → resolved, no action needed
+    estado: extra.estado || 'pendiente',
   };
 }
 
@@ -294,6 +319,12 @@ function extractEmail(from) {
 function countByCategory(classified) {
   const counts = {};
   classified.forEach(c => { counts[c.category] = (counts[c.category] || 0) + 1; });
+  return counts;
+}
+
+function countByEstado(classified) {
+  const counts = { pendiente: 0, esperando_cliente: 0, esperando_nosotros: 0, en_jira: 0, archivado: 0 };
+  classified.forEach(c => { counts[c.estado] = (counts[c.estado] || 0) + 1; });
   return counts;
 }
 

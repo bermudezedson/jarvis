@@ -7,6 +7,21 @@ briefing:
 
 mail:
   safe_mode: true
+
+  # Patrones de asunto o remitente que se excluyen ANTES de clasificar.
+  # Ideal para correos internos de ERP, notificaciones de sistema, etc.
+  # que no necesitas ver en Jarvis y solo generan ruido.
+  exclude_patterns:
+    - "nota de Venta Normal N"
+    - "nota de Crédito Electrónica N"
+    - "nota de Débito N"
+    - "Factura Electrónica N"
+    - "Cliente - Api"
+    - "Asiento Contable"
+    - "Cierre de Caja"
+    - "Boleta Electrónica N"
+    - "Liquidación de Sueldo"
+
   spam_domains:
     - "wordpress.com"
     - "wordpress.org"

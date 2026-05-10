@@ -534,3 +534,107 @@ html, body, #root { height: 100%; background: var(--bg); color: var(--text); fon
 .mc-btn-phishing:hover:not(:disabled) { background: rgba(201,27,27,.28); }
 .mc-btn-phishing:disabled { opacity: .6; cursor: not-allowed; }
 .mc-phishing-reported { font-size: 11px; font-weight: 600; color: var(--green); }
+
+/* ─── Estado filter bar ──────────────────────────────────────────────────────── */
+.mc-estado-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 2px 0; }
+.mc-estado-btn {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 11px; padding: 4px 10px; background: var(--card);
+  border: 1px solid var(--border); color: var(--muted);
+  border-radius: 20px; cursor: pointer; transition: all .15s;
+}
+.mc-estado-btn:hover { color: var(--text); }
+.mc-estado-btn.active {
+  background: rgba(255,255,255,.06); color: var(--text);
+  border-color: var(--estado-color);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--estado-color) 30%, transparent);
+}
+.mc-estado-icon { font-size: 11px; }
+
+/* ─── Estado badge on item ───────────────────────────────────────────────────── */
+.mc-estado-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 10px; background: rgba(255,255,255,.05); }
+.mc-waiting     { border-left-color: var(--iron-gold) !important; }
+.mc-needs-us    { border-left-color: var(--iron-red)  !important; }
+.mc-waiting-count { color: var(--iron-gold); font-size: 11px; font-weight: 600; }
+.mc-excluded    { color: var(--muted); font-size: 11px; }
+
+/* ─── Estado button on item ──────────────────────────────────────────────────── */
+.mc-btn-estado {
+  font-size: 14px; padding: 3px 8px; border-radius: 5px;
+  background: transparent; border: 1px solid var(--estado-c, var(--border));
+  color: var(--estado-c, var(--muted)); cursor: pointer; transition: all .15s;
+}
+.mc-btn-estado:hover { background: rgba(255,255,255,.05); }
+.mc-estado-selector { min-width: 200px; }
+.mc-option-active { background: rgba(255,255,255,.06) !important; }
+
+/* ─── Mail Status Widget (Briefing) ──────────────────────────────────────────── */
+.zone-mail-status { flex-shrink: 0; margin-top: 4px; }
+
+.mail-status-widget {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 12px;
+}
+
+.msw-header { display: flex; align-items: center; justify-content: space-between; }
+.msw-title  { font-size: 12px; font-weight: 600; color: var(--text); }
+.msw-age    { font-size: 11px; color: var(--muted); }
+
+/* Summary row */
+.msw-summary { display: flex; align-items: center; gap: 16px; }
+
+.msw-donut-wrap { position: relative; flex-shrink: 0; }
+.msw-donut {
+  width: 52px; height: 52px; border-radius: 50%;
+  mask: radial-gradient(farthest-side, transparent 62%, #000 63%);
+  -webkit-mask: radial-gradient(farthest-side, transparent 62%, #000 63%);
+}
+.msw-donut-total {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  font-size: 13px; font-weight: 700; color: var(--text);
+}
+
+.msw-stats { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.msw-stat  { display: flex; align-items: center; gap: 7px; }
+.msw-stat-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.msw-stat-n   { font-size: 18px; font-weight: 800; color: var(--text); min-width: 24px; line-height: 1; }
+.msw-stat-label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.msw-overdue-pill {
+  font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 10px;
+  background: rgba(201,27,27,.15); color: var(--iron-red);
+}
+.msw-all-clear { font-size: 12px; color: var(--green); }
+
+/* Thread list */
+.msw-thread-list { display: flex; flex-direction: column; gap: 4px; }
+.msw-thread-list-title { font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 2px; }
+
+.msw-thread-row {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 8px 10px; background: rgba(255,255,255,.02);
+  border: 1px solid var(--border); border-left: 3px solid var(--border);
+  border-radius: 6px; transition: border-color .15s;
+}
+.msw-thread-row.msw-thread-urgent { border-left-color: var(--iron-red); }
+
+.msw-thread-main  { display: flex; align-items: baseline; gap: 8px; }
+.msw-thread-client { font-size: 11px; font-weight: 700; color: var(--blue); flex-shrink: 0; }
+.msw-thread-subject {
+  font-size: 12px; color: var(--text); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+.msw-thread-meta { display: flex; align-items: center; gap: 8px; }
+
+.msw-estado-pill {
+  font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 10px;
+}
+.msw-estado-esperando_cliente  { background: rgba(212,144,12,.15); color: var(--iron-gold); }
+.msw-estado-esperando_nosotros { background: rgba(201,27,27,.15);  color: var(--iron-red);  }
+.msw-estado-en_jira            { background: rgba(167,139,250,.15); color: var(--purple); }
+.msw-estado-pendiente          { background: rgba(100,116,139,.1);  color: var(--muted);  }
+
+.msw-age        { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.msw-age-urgent { color: var(--iron-red); font-weight: 600; }
+
+.msw-empty        { font-size: 12px; color: var(--muted); padding: 8px 0; }
+.msw-empty-threads { font-size: 11px; color: var(--muted); font-style: italic; }

@@ -62,6 +62,21 @@ export function useMailInbox() {
     });
   }, []);
 
+  const setStatus = useCallback(async (threadId, estado) => {
+    await fetch(`${API}/mail/set-status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ thread_id: threadId, estado }),
+    });
+    setData(prev => {
+      if (!prev) return prev;
+      const items = prev.items.map(i => i.thread_id === threadId ? { ...i, estado } : i);
+      const byEstado = { pendiente: 0, esperando_cliente: 0, esperando_nosotros: 0, en_jira: 0, archivado: 0 };
+      items.forEach(i => { byEstado[i.estado || 'pendiente'] = (byEstado[i.estado || 'pendiente'] || 0) + 1; });
+      return { ...prev, items, by_estado: byEstado };
+    });
+  }, []);
+
   const reportPhishing = useCallback(async (threadId) => {
     const res = await fetch(`${API}/mail/report-phishing`, {
       method: 'POST',
@@ -123,5 +138,5 @@ export function useMailInbox() {
 
   useEffect(() => { fetchInbox(); }, [fetchInbox]);
 
-  return { data, loading, classifying, error, classify, approve, approveAll, reclassify, reportPhishing, refetch: fetchInbox };
+  return { data, loading, classifying, error, classify, approve, approveAll, reclassify, setStatus, reportPhishing, refetch: fetchInbox };
 }

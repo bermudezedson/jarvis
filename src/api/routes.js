@@ -125,6 +125,33 @@ router.post('/mail/approve-all', async (req, res) => {
   }
 });
 
+router.post('/mail/set-status', (req, res) => {
+  try {
+    const { thread_id, estado } = req.body;
+    const valid = ['pendiente', 'esperando_cliente', 'esperando_nosotros', 'en_jira', 'archivado'];
+    if (!thread_id || !estado) return res.status(400).json({ error: 'thread_id and estado required' });
+    if (!valid.includes(estado)) return res.status(400).json({ error: `estado must be one of: ${valid.join(', ')}` });
+
+    const data = cache.read('mail-classifications.json');
+    if (!data) return res.status(404).json({ error: 'No classifications found' });
+    const item = data.items.find(i => i.thread_id === thread_id);
+    if (!item) return res.status(404).json({ error: 'Thread not found' });
+
+    item.estado = estado;
+
+    // Recount by_estado
+    const byEstado = { pendiente: 0, esperando_cliente: 0, esperando_nosotros: 0, en_jira: 0, archivado: 0 };
+    data.items.forEach(i => { byEstado[i.estado || 'pendiente'] = (byEstado[i.estado || 'pendiente'] || 0) + 1; });
+    data.by_estado = byEstado;
+
+    cache.write('mail-classifications.json', data);
+    logger.info('Mail status updated', { thread_id, estado, subject: item.subject });
+    res.json({ success: true, thread_id, estado });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/mail/report-phishing', async (req, res) => {
   try {
     const { thread_id } = req.body;
