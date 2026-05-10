@@ -1,0 +1,12 @@
+node_modules/
+.claude/
+.env
+dist/
+*.log
+src/cache/data/briefing-am.json
+src/cache/data/briefing-pm.json
+src/cache/data/commitments.json
+src/cache/data/client-pulse.json
+src/cache/data/jira-tasks.json
+src/cache/data/mail-classifications.json
+src/cache/data/last-refresh.json

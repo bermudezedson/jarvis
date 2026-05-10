@@ -1,0 +1,120 @@
+{
+  "generated_at": "2026-05-09T07:00:00-04:00",
+  "type": "morning",
+  "is_mock": true,
+  "sources": {
+    "gmail": "mock",
+    "calendar": "mock",
+    "jira": "mock"
+  },
+  "metrics": {
+    "unread_emails": 18,
+    "emails_need_decision": 4,
+    "jira_tasks_today": 6,
+    "overdue_tasks": 2,
+    "meetings_today": 3,
+    "next_meeting": {
+      "time": "10:00",
+      "title": "Sync equipo dev",
+      "attendees": 4
+    },
+    "open_commitments": 9,
+    "overdue_commitments": 2
+  },
+  "executive_inbox": [
+    {
+      "id": "mock_1",
+      "type": "client",
+      "severity": "high",
+      "summary": "AutoPartes Sur — solicita NC por factura duplicada #F-2389",
+      "age_days": 3,
+      "source": "gmail",
+      "thread_id": "mock_thread_001",
+      "suggested_action": "Coordinar con contabilidad emisión de nota de crédito"
+    },
+    {
+      "id": "mock_2",
+      "type": "client",
+      "severity": "high",
+      "summary": "Distribuidora Automotriz Central — error en API de catálogo, sin stock visible",
+      "age_days": 1,
+      "source": "gmail",
+      "thread_id": "mock_thread_002",
+      "suggested_action": "Escalar a equipo técnico, responder con ETA"
+    },
+    {
+      "id": "mock_3",
+      "type": "task",
+      "severity": "high",
+      "summary": "[CR-142] Implementar módulo de notas de crédito — vencido hace 2 días",
+      "age_days": 2,
+      "source": "jira",
+      "thread_id": "CR-142",
+      "suggested_action": "Actualizar estado o reasignar"
+    },
+    {
+      "id": "mock_4",
+      "type": "followup",
+      "severity": "medium",
+      "summary": "Sin respuesta 52h — TecnoRepuestos consulta integración ERP",
+      "age_days": 2,
+      "source": "gmail",
+      "thread_id": "mock_thread_003",
+      "suggested_action": "Responder o delegar a equipo comercial"
+    },
+    {
+      "id": "mock_5",
+      "type": "client",
+      "severity": "medium",
+      "summary": "Repuestos del Valle — consulta sobre nuevas tarifas Q2 2026",
+      "age_days": 1,
+      "source": "gmail",
+      "thread_id": "mock_thread_004",
+      "suggested_action": "Revisar propuesta comercial y responder"
+    }
+  ],
+  "risk_radar": [
+    {
+      "severity": "high",
+      "message": "2 tareas Jira vencidas sin actualizar",
+      "clients": [],
+      "action": "Revisar CR-142 y CR-138 en Jira"
+    },
+    {
+      "severity": "high",
+      "message": "Error en API de catálogo reportado por cliente premium (DAC)",
+      "clients": ["Distribuidora Automotriz Central"],
+      "action": "Verificar logs y dar ETA de resolución"
+    },
+    {
+      "severity": "medium",
+      "message": "2 clientes B2B sin contacto hace +16 días",
+      "clients": ["Repuestos del Valle", "AutoPartes Norte"],
+      "action": "Agendar llamada de seguimiento esta semana"
+    },
+    {
+      "severity": "medium",
+      "message": "2 compromisos vencidos en correos enviados",
+      "clients": [],
+      "action": "Revisar bandeja de enviados y hacer seguimiento"
+    },
+    {
+      "severity": "info",
+      "message": "Sprint CR-Q2 al 68% de completitud — 3 días para cierre",
+      "clients": [],
+      "action": "Verificar en Jira si el sprint va a tiempo"
+    }
+  ],
+  "deep_work_slots": [
+    {
+      "start": "08:00",
+      "end": "10:00",
+      "duration_minutes": 120
+    },
+    {
+      "start": "14:00",
+      "end": "17:00",
+      "duration_minutes": 180
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+clients:
+  - name: "AutoPartes Sur"
+    domains: ["autopartessur.cl"]
+    contacts: ["juan@autopartessur.cl", "ventas@autopartessur.cl"]
+    jira_label: "client-autopartessur"
+    tier: "premium"
+
+  - name: "Repuestos del Valle"
+    domains: ["repuestosdelvalle.cl"]
+    contacts: ["contacto@repuestosdelvalle.cl"]
+    jira_label: "client-repuestosvalle"
+    tier: "standard"
+
+  - name: "AutoPartes Norte"
+    domains: ["autopartesnorte.cl"]
+    contacts: ["gerencia@autopartesnorte.cl"]
+    jira_label: "client-autopartesnorte"
+    tier: "premium"
+
+  - name: "TecnoRepuestos"
+    domains: ["tecnorepuestos.cl"]
+    contacts: ["soporte@tecnorepuestos.cl", "admin@tecnorepuestos.cl"]
+    jira_label: "client-tecnorepuestos"
+    tier: "standard"
+
+  - name: "Distribuidora Automotriz Central"
+    domains: ["dacchile.cl"]
+    contacts: ["operaciones@dacchile.cl"]
+    jira_label: "client-dac"
+    tier: "premium"
+
+  # Agregar clientes adicionales con el mismo formato
+  # tier: "premium" | "standard" | "trial"

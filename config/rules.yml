@@ -1,0 +1,49 @@
+timezone: "America/Santiago"
+
+briefing:
+  morning_cron: "0 7 * * 1-5"      # Lunes a viernes 7:00 AM
+  evening_cron: "0 18 * * 1-5"     # Lunes a viernes 6:00 PM
+  refresh_interval_minutes: 5
+
+mail:
+  safe_mode: true
+  spam_domains:
+    - "wordpress.com"
+    - "wordpress.org"
+    - "wp-notifications.com"
+  priority_keywords:
+    - "urgente"
+    - "pago"
+    - "factura"
+    - "caída"
+    - "error"
+    - "reclamo"
+    - "nota de crédito"
+  max_executive_inbox_items: 7
+
+jira:
+  default_project: "CR"
+  issue_types:
+    client_request: "Task"
+    bug_report: "Bug"
+    feature: "Story"
+  stale_days: 5
+
+clients:
+  stale_contact_days: 14
+  health_weights:
+    last_email: 0.3
+    last_meeting: 0.3
+    open_tickets: 0.2
+    response_time: 0.2
+
+commitments:
+  trigger_phrases:
+    - "te lo envío"
+    - "lo revisamos"
+    - "me encargo"
+    - "quedamos en"
+    - "te confirmo"
+    - "lo tengo listo"
+    - "te respondo"
+  default_deadline_days: 3

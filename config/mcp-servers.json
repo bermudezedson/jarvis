@@ -1,0 +1,24 @@
+{
+  "servers": {
+    "gmail": {
+      "url_env": "GMAIL_MCP_URL",
+      "token_env": "GMAIL_ACCESS_TOKEN",
+      "tools": ["search_threads", "get_thread", "list_labels"]
+    },
+    "calendar": {
+      "url_env": "CALENDAR_MCP_URL",
+      "token_env": "CALENDAR_ACCESS_TOKEN",
+      "tools": ["list_events", "get_event", "list_calendars"]
+    },
+    "jira": {
+      "url_env": "JIRA_MCP_URL",
+      "token_env": "JIRA_ACCESS_TOKEN",
+      "tools": ["searchJiraIssuesUsingJql", "getJiraIssue", "getVisibleJiraProjects"]
+    },
+    "confluence": {
+      "url_env": "CONFLUENCE_MCP_URL",
+      "token_env": "CONFLUENCE_ACCESS_TOKEN",
+      "tools": ["getConfluencePage", "searchConfluenceUsingCql"]
+    }
+  }
+}

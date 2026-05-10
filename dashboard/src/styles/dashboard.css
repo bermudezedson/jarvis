@@ -1,0 +1,294 @@
+/* ─── Reset & Base ──────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0f1117;
+  --card:      #1a1d27;
+  --border:    #2a2d37;
+  --text:      #e2e8f0;
+  --muted:     #64748b;
+  --red:       #ef4444;
+  --yellow:    #f59e0b;
+  --green:     #22c55e;
+  --blue:      #3b82f6;
+  --purple:    #a78bfa;
+  --font:      system-ui, -apple-system, sans-serif;
+}
+
+html, body, #root { height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
+
+/* ─── Layout ────────────────────────────────────────────────────────────────── */
+.cockpit { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+.cockpit-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px; border-bottom: 1px solid var(--border);
+  background: #13151f; flex-shrink: 0;
+}
+
+.cockpit-logo { display: flex; align-items: center; gap: 8px; }
+.logo-icon { font-size: 18px; }
+.logo-name { font-size: 16px; font-weight: 700; letter-spacing: .5px; }
+.logo-sub { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+
+.cockpit-controls { display: flex; align-items: center; gap: 16px; }
+
+.cockpit-main { display: flex; flex-direction: column; flex: 1; overflow: hidden; padding: 16px; gap: 16px; }
+
+.zone-top { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+
+.zone-row { display: flex; gap: 16px; flex: 1; min-height: 0; }
+
+.zone-inbox { flex: 1.4; overflow-y: auto; }
+.zone-radar { flex: 1; overflow-y: auto; }
+
+.zone-title {
+  font-size: 11px; font-weight: 600; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
+}
+
+/* ─── Toggle AM/PM ──────────────────────────────────────────────────────────── */
+.view-toggle { display: flex; gap: 2px; background: var(--card); border-radius: 6px; padding: 2px; }
+.toggle-btn {
+  padding: 4px 12px; border: none; background: transparent; color: var(--muted);
+  font-size: 11px; font-weight: 600; letter-spacing: .5px; cursor: pointer; border-radius: 4px;
+  transition: background .15s, color .15s;
+}
+.toggle-btn.active { background: var(--border); color: var(--text); }
+.toggle-btn:hover:not(.active) { color: var(--text); }
+
+/* ─── Refresh indicator ─────────────────────────────────────────────────────── */
+.refresh-indicator { display: flex; align-items: center; gap: 10px; }
+.refresh-time { font-size: 11px; color: var(--muted); }
+.refresh-btn {
+  padding: 5px 12px; border: 1px solid var(--border); background: var(--card);
+  color: var(--text); font-size: 12px; border-radius: 5px; cursor: pointer;
+  transition: border-color .15s;
+}
+.refresh-btn:hover { border-color: var(--blue); }
+.refresh-btn:disabled { opacity: .5; cursor: default; }
+.refresh-btn.refreshing { animation: spin 1s linear infinite; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── Status bar ────────────────────────────────────────────────────────────── */
+.status-bar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+
+.metric-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 16px; position: relative; overflow: hidden;
+}
+.metric-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+}
+.metric-card.sev-green::before { background: var(--green); }
+.metric-card.sev-yellow::before { background: var(--yellow); }
+.metric-card.sev-red::before { background: var(--red); }
+.metric-card.sev-ok::before { background: var(--blue); }
+.metric-card.sev-unknown::before { background: var(--border); }
+
+.metric-value { font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 4px; }
+.metric-label { font-size: 12px; color: var(--muted); font-weight: 500; }
+.metric-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+.metric-card.sev-red .metric-value { color: var(--red); }
+.metric-card.sev-yellow .metric-value { color: var(--yellow); }
+.metric-card.sev-green .metric-value { color: var(--green); }
+
+/* ─── Briefing panel ────────────────────────────────────────────────────────── */
+.briefing-panel {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
+  padding: 8px 14px; background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+}
+.briefing-type { font-size: 12px; font-weight: 600; }
+.briefing-time { font-size: 11px; color: var(--muted); }
+.mock-badge {
+  font-size: 10px; padding: 2px 6px; border-radius: 3px;
+  background: var(--yellow); color: #000; font-weight: 700; letter-spacing: .5px;
+}
+.briefing-sources { display: flex; gap: 8px; }
+.source-tag { font-size: 11px; padding: 2px 7px; border-radius: 4px; }
+.source-ok { background: rgba(34,197,94,.15); color: var(--green); }
+.source-error { background: rgba(239,68,68,.15); color: var(--red); }
+.source-mock { background: rgba(245,158,11,.15); color: var(--yellow); }
+.deep-work { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.deep-work-label { font-size: 11px; color: var(--muted); }
+.deep-work-slot {
+  font-size: 11px; padding: 2px 8px; border-radius: 4px;
+  background: rgba(59,130,246,.15); color: var(--blue);
+}
+
+/* ─── Executive inbox ───────────────────────────────────────────────────────── */
+.executive-inbox { display: flex; flex-direction: column; gap: 8px; }
+
+.inbox-item {
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px 14px; border-left: 3px solid transparent;
+}
+.inbox-item.sev-red { border-left-color: var(--red); }
+.inbox-item.sev-yellow { border-left-color: var(--yellow); }
+.inbox-item.sev-green { border-left-color: var(--green); }
+
+.inbox-item-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.inbox-badge {
+  font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 3px;
+  text-transform: uppercase; letter-spacing: .5px;
+}
+.badge-client { background: rgba(59,130,246,.2); color: var(--blue); }
+.badge-followup { background: rgba(167,139,250,.2); color: var(--purple); }
+.badge-task { background: rgba(245,158,11,.2); color: var(--yellow); }
+.badge-internal { background: rgba(100,116,139,.2); color: var(--muted); }
+
+.inbox-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.dot-red { background: var(--red); }
+.dot-yellow { background: var(--yellow); }
+.dot-green { background: var(--green); }
+.dot-blue { background: var(--blue); }
+
+.inbox-age { font-size: 11px; color: var(--muted); margin-left: auto; }
+.inbox-summary { font-size: 13px; line-height: 1.4; margin-bottom: 6px; }
+.inbox-footer { display: flex; align-items: center; justify-content: space-between; }
+.inbox-action-hint { font-size: 11px; color: var(--muted); font-style: italic; }
+.inbox-btn {
+  font-size: 11px; padding: 3px 10px; border: 1px solid var(--border);
+  background: transparent; color: var(--text); border-radius: 4px; cursor: pointer;
+  transition: border-color .15s;
+}
+.inbox-btn:hover { border-color: var(--blue); color: var(--blue); }
+.inbox-empty { color: var(--muted); font-size: 13px; padding: 20px 0; text-align: center; }
+
+/* ─── Risk radar ────────────────────────────────────────────────────────────── */
+.risk-radar { display: flex; flex-direction: column; gap: 8px; }
+
+.risk-item {
+  display: flex; gap: 10px; align-items: flex-start;
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+}
+.risk-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
+.risk-body { flex: 1; }
+.risk-message { font-size: 13px; line-height: 1.4; }
+.risk-clients { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.risk-action { font-size: 11px; color: var(--muted); font-style: italic; margin-top: 3px; }
+.radar-empty { color: var(--muted); font-size: 13px; padding: 20px 0; text-align: center; }
+
+/* ─── Loading / Error ───────────────────────────────────────────────────────── */
+.loading-screen {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 12px; color: var(--muted);
+}
+.spinner {
+  width: 28px; height: 28px; border: 2px solid var(--border);
+  border-top-color: var(--blue); border-radius: 50%; animation: spin .8s linear infinite;
+}
+.error-banner {
+  background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3);
+  color: var(--red); padding: 10px 16px; margin: 8px 16px; border-radius: 6px; font-size: 13px;
+}
+
+/* ─── Scrollbars ────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ─── Phase 2 layout ────────────────────────────────────────────────────────── */
+.zone-row-phase2 { max-height: 340px; }
+.zone-commitments { flex: 1; overflow-y: auto; }
+.zone-pulse { flex: 1.2; overflow-y: auto; }
+
+/* ─── Commitment tracker ────────────────────────────────────────────────────── */
+.commitment-tracker { display: flex; flex-direction: column; gap: 8px; }
+
+.commit-summary { display: flex; gap: 8px; margin-bottom: 4px; }
+.commit-count { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; }
+.count-red { background: rgba(239,68,68,.15); color: var(--red); }
+.count-ok { background: rgba(34,197,94,.15); color: var(--green); }
+
+.commitment-item {
+  background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--border);
+  border-radius: 8px; padding: 10px 12px;
+}
+.commitment-item.commit-overdue { border-left-color: var(--red); }
+
+.commit-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.commit-to { font-size: 12px; font-weight: 600; color: var(--blue); }
+.commit-phrase { font-size: 12px; color: var(--muted); font-style: italic; margin-bottom: 2px; }
+.commit-context { font-size: 12px; line-height: 1.4; margin-bottom: 6px; }
+.commit-footer { display: flex; align-items: center; justify-content: space-between; }
+.commit-subject { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 65%; }
+.commit-resolve-btn {
+  font-size: 11px; padding: 3px 9px; border: 1px solid var(--green); background: transparent;
+  color: var(--green); border-radius: 4px; cursor: pointer; white-space: nowrap;
+  transition: background .15s;
+}
+.commit-resolve-btn:hover { background: rgba(34,197,94,.1); }
+.commit-empty { color: var(--muted); font-size: 13px; padding: 16px 0; text-align: center; }
+
+.deadline-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 3px; margin-left: auto; }
+.deadline-overdue { background: rgba(239,68,68,.15); color: var(--red); }
+.deadline-today { background: rgba(245,158,11,.15); color: var(--yellow); }
+.deadline-upcoming { background: rgba(59,130,246,.12); color: var(--blue); }
+
+.show-more-btn {
+  font-size: 12px; color: var(--muted); background: none; border: none;
+  cursor: pointer; padding: 4px 0; text-align: left;
+}
+.show-more-btn:hover { color: var(--text); }
+
+/* ─── Client pulse ───────────────────────────────────────────────────────────── */
+.client-pulse { display: flex; flex-direction: column; gap: 8px; }
+
+.pulse-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.pulse-summary { display: flex; gap: 6px; flex-wrap: wrap; }
+.pulse-badge { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 3px; }
+.badge-red { background: rgba(239,68,68,.15); color: var(--red); }
+.badge-yellow { background: rgba(245,158,11,.15); color: var(--yellow); }
+.badge-green { background: rgba(34,197,94,.15); color: var(--green); }
+
+.client-list { display: flex; flex-direction: column; gap: 6px; }
+
+.client-row {
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden;
+}
+.client-row-header {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer;
+  transition: background .15s;
+}
+.client-row-header:hover { background: rgba(255,255,255,.03); }
+.client-name { font-size: 13px; font-weight: 500; flex: 1; min-width: 0; }
+.client-status-label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.expand-icon { font-size: 9px; color: var(--muted); }
+
+.tier-badge { font-size: 9px; padding: 1px 5px; border-radius: 3px; text-transform: uppercase; letter-spacing: .5px; }
+.tier-premium { background: rgba(167,139,250,.15); color: var(--purple); }
+.tier-standard { background: rgba(100,116,139,.15); color: var(--muted); }
+.tier-trial { background: rgba(59,130,246,.12); color: var(--blue); }
+
+.score-bar-wrap { position: relative; width: 60px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; flex-shrink: 0; }
+.score-bar-fill { height: 100%; border-radius: 3px; transition: width .3s; }
+.bar-green { background: var(--green); }
+.bar-yellow { background: var(--yellow); }
+.bar-red { background: var(--red); }
+.score-bar-label { position: absolute; right: -30px; top: -3px; font-size: 10px; color: var(--muted); white-space: nowrap; }
+.score-bar-empty { font-size: 11px; color: var(--muted); }
+
+.client-breakdown { padding: 0 12px 10px; border-top: 1px solid var(--border); margin-top: 2px; }
+.breakdown-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
+.bd-label { flex: 1; color: var(--muted); }
+.bd-value { width: 30px; text-align: right; color: var(--text); font-size: 11px; }
+.client-alert { font-size: 11px; color: var(--yellow); margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+
+.pulse-empty { color: var(--muted); font-size: 13px; padding: 16px 0; text-align: center; }
+.mock-note { font-size: 10px; color: var(--muted); text-align: center; padding-top: 8px; }
+.inline-btn {
+  font-size: 11px; padding: 3px 8px; border: 1px solid var(--border);
+  background: transparent; color: var(--muted); border-radius: 4px; cursor: pointer;
+}
+.inline-btn:hover { color: var(--text); border-color: var(--blue); }
+
+/* ─── Responsive ────────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .status-bar { grid-template-columns: repeat(2, 1fr); }
+  .zone-row { flex-direction: column; }
+  .zone-row-phase2 { max-height: none; }
+}
