@@ -18,6 +18,15 @@ async function run() {
   } catch (err) {
     logger.error('Cron: client scan failed', { skill: 'cron:morning', error: err.message });
   }
+
+  // Auto state-machine rules (archive informativos, escalate stale waiting, etc.)
+  try {
+    const sm = require('../skills/state-machine');
+    const autoResults = await sm.runAutoRules();
+    logger.info('Cron: auto rules done', { skill: 'cron:morning', ...autoResults });
+  } catch (err) {
+    logger.error('Cron: auto rules failed', { skill: 'cron:morning', error: err.message });
+  }
 }
 
 module.exports = { run };

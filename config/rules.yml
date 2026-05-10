@@ -124,6 +124,23 @@ client_scan:
   refresh_states_cron: "*/30 * * * *"  # Cada 30 min (recalcula sin costo)
   initial_days: 30                      # Ventana del escaneo inicial
 
+state_machine:
+  informativo_auto_archive_days: 7
+  waiting_escalation_days: 14
+  invoice_rules:
+    hide_until_client_responds: true
+    days_without_response_to_pending: 15
+    auto_resolve_keywords:
+      - "acuso recibo"
+      - "acuse recibo"
+      - "pago programado"
+      - "pago realizado"
+      - "transferencia realizada"
+      - "transferencia enviada"
+      - "ya fue pagado"
+      - "deposito realizado"
+      - "depósito realizado"
+
 commitments:
   trigger_phrases:
     - "te lo envío"

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import FeedbackModal from './FeedbackModal';
+import RulesPanel    from './RulesPanel';
 
 const API   = 'http://localhost:3000/api';
 const GMAIL = id => `https://mail.google.com/mail/u/0/#inbox/${id}`;
@@ -208,11 +209,121 @@ function MessageBubble({ message, onNameSaved }) {
   );
 }
 
+// ─── State machine ────────────────────────────────────────────────────────────
+
+const VALID_TRANSITIONS = {
+  requiere_mi_accion: [
+    { estado: 'pendiente',         label: 'Mover a Pendientes',    color: '' },
+    { estado: 'esperando_cliente', label: 'Esperando cliente',     color: '' },
+    { estado: 'solucionado',       label: 'Marcar solucionado',    color: 'green' },
+    { estado: 'archivado',         label: 'Archivar',              color: 'gray' },
+  ],
+  pendiente: [
+    { estado: 'requiere_mi_accion', label: 'Subir a Urgentes',     color: 'orange' },
+    { estado: 'esperando_cliente',  label: 'Esperando cliente',    color: '' },
+    { estado: 'solucionado',        label: 'Marcar solucionado',   color: 'green' },
+    { estado: 'archivado',          label: 'Archivar',             color: 'gray' },
+  ],
+  esperando_cliente: [
+    { estado: 'requiere_mi_accion', label: 'Requiere mi acción',   color: 'orange' },
+    { estado: 'solucionado',        label: 'Marcar solucionado',   color: 'green' },
+    { estado: 'archivado',          label: 'Archivar',             color: 'gray' },
+  ],
+  informativo: [
+    { estado: 'requiere_mi_accion', label: 'Requiere mi acción',   color: 'orange' },
+    { estado: 'pendiente',          label: 'Mover a Pendientes',   color: '' },
+    { estado: 'solucionado',        label: 'Marcar solucionado',   color: 'green' },
+    { estado: 'archivado',          label: 'Archivar',             color: 'gray' },
+  ],
+  en_jira: [
+    { estado: 'solucionado',        label: 'Marcar solucionado',   color: 'green' },
+    { estado: 'requiere_mi_accion', label: 'Reabrir',              color: 'orange' },
+  ],
+};
+
+// Determine which transition key to use given a thread
+function transitionKey(t, isInformativo) {
+  if (isInformativo || t.estado === 'informativo') return 'informativo';
+  if (t.estado === 'requiere_mi_accion')           return 'requiere_mi_accion';
+  if (t.estado === 'esperando_cliente')            return 'esperando_cliente';
+  if (t.estado === 'en_jira')                      return 'en_jira';
+  // pendiente — but urgente threads (high severity) show as requiere_mi_accion
+  if (t.severity === 'high' && !t.last_sender_is_me) return 'requiere_mi_accion';
+  return 'pendiente';
+}
+
+function MoveToDropdown({ t, isInformativo, onTransition }) {
+  const [open,        setOpen]        = useState(false);
+  const [resolveMode, setResolveMode] = useState(false);
+  const [resolveNote, setResolveNote] = useState('');
+
+  const key         = transitionKey(t, isInformativo);
+  const transitions = VALID_TRANSITIONS[key] || [];
+  if (transitions.length === 0) return null;
+
+  function handleClick(estado) {
+    if (estado === 'solucionado') {
+      setOpen(false);
+      setResolveMode(true);
+    } else {
+      setOpen(false);
+      onTransition(estado, '');
+    }
+  }
+
+  if (resolveMode) {
+    return (
+      <div className="resolve-form" onClick={e => e.stopPropagation()}>
+        <input
+          className="resolve-input"
+          placeholder="Nota de resolución (opcional)"
+          value={resolveNote}
+          autoFocus
+          onChange={e => setResolveNote(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { onTransition('solucionado', resolveNote); setResolveMode(false); }
+            if (e.key === 'Escape') setResolveMode(false);
+          }}
+        />
+        <button className="ctl-btn ctl-btn-resolve-confirm"
+          onClick={() => { onTransition('solucionado', resolveNote); setResolveMode(false); }}>
+          ✓ Confirmar
+        </button>
+        <button className="ctl-btn ctl-btn-cancel" onClick={() => setResolveMode(false)}>×</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="move-to-wrapper" onClick={e => e.stopPropagation()}>
+      <button className="move-to-btn" onClick={() => setOpen(o => !o)}>
+        Mover a <span style={{ fontSize: '9px', marginLeft: '2px' }}>▾</span>
+      </button>
+      {open && (
+        <>
+          <div className="move-to-backdrop" onClick={() => setOpen(false)} />
+          <div className="move-to-dropdown">
+            {transitions.map(tr => (
+              <button
+                key={tr.estado}
+                className={`move-to-option ${tr.color || ''}`}
+                onClick={() => handleClick(tr.estado)}
+              >
+                {tr.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Thread row (expandable accordion) ───────────────────────────────────────
 
 const INITIAL_MESSAGES = 3;
 
-function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus, isInformativo = false }) {
+function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, jiraStatus, isInformativo = false }) {
   const [expanded,       setExpanded]       = useState(false);
   const [messages,       setMessages]       = useState(null);
   const [loadingMsgs,    setLoadingMsgs]    = useState(false);
@@ -220,8 +331,6 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus, is
   const [replyText,      setReplyText]      = useState('');
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [sendLoading,    setSendLoading]    = useState(false);
-  const [resolveNote,    setResolveNote]    = useState('');
-  const [showResolve,    setShowResolve]    = useState(false);
   const [replyMode,      setReplyMode]      = useState('reply'); // 'reply' | 'reply_all'
   const [summary,        setSummary]        = useState(t.ai_summary || null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -422,7 +531,7 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus, is
 
           {/* Action bar */}
           <div className="action-bar">
-            {/* Jira — solo para threads no informativos */}
+            {/* Jira — non-informativo only */}
             {!isInformativo && (
               jiraStatus === 'done'
                 ? <span className="ctl-btn ctl-btn-jira ctl-jira-done">✓ Jira</span>
@@ -435,40 +544,19 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus, is
                   </button>
             )}
 
-            {/* Solucionado — solo para no informativos */}
-            {!isInformativo && (showResolve ? (
-              <div className="resolve-form" onClick={e => e.stopPropagation()}>
-                <input
-                  className="resolve-input"
-                  placeholder="Nota de resolución (opcional)"
-                  value={resolveNote}
-                  onChange={e => setResolveNote(e.target.value)}
-                />
-                <button className="ctl-btn ctl-btn-resolve-confirm"
-                  onClick={() => { onResolve(t.thread_id, resolveNote); setShowResolve(false); }}>
-                  ✓ Confirmar
-                </button>
-                <button className="ctl-btn ctl-btn-cancel" onClick={() => setShowResolve(false)}>×</button>
-              </div>
-            ) : (
-              <button className="ctl-btn ctl-btn-resolve"
-                onClick={e => { e.stopPropagation(); setShowResolve(true); }}>
-                Solucionado
-              </button>
-            ))}
-
-            {/* Gmail — siempre visible */}
+            {/* Gmail link for informativos */}
             {isInformativo && (
               <a href={GMAIL(t.thread_id)} target="_blank" rel="noreferrer" className="ctl-btn ctl-btn-reply">
                 Gmail ↗
               </a>
             )}
 
-            {/* Archivar */}
-            <button className="ctl-btn ctl-btn-archive"
-              onClick={e => { e.stopPropagation(); onArchive(t.thread_id); }}>
-              Archivar
-            </button>
+            {/* "Mover a" dropdown — replaces separate Solucionado / Archivar */}
+            <MoveToDropdown
+              t={t}
+              isInformativo={isInformativo}
+              onTransition={(newEstado, note) => onTransition(t.thread_id, newEstado, note)}
+            />
 
             {/* Corregir / Feedback */}
             <button className="ctl-btn ctl-btn-feedback"
@@ -645,9 +733,10 @@ export default function ClientActionList({ clientThreads }) {
   const [jiraStatus,    setJiraStatus]    = useState({});
   const [closedItems,   setClosedItems]   = useState(null);  // lazy loaded
   const [closedLoading, setClosedLoading] = useState(false);
-  const [feedbackThread,    setFeedbackThread]    = useState(null);
-  const [showInvestigate,   setShowInvestigate]   = useState(false);
-  const [summaryBatchMsg,   setSummaryBatchMsg]   = useState(null);
+  const [feedbackThread,      setFeedbackThread]      = useState(null);
+  const [showInvestigate,     setShowInvestigate]     = useState(false);
+  const [showRules,           setShowRules]           = useState(false);
+  const [summaryBatchMsg,     setSummaryBatchMsg]     = useState(null);
   const [summaryBatchLoading, setSummaryBatchLoading] = useState(false);
 
   useEffect(() => {
@@ -691,6 +780,28 @@ export default function ClientActionList({ clientThreads }) {
         body: JSON.stringify({ thread_id, note }),
       });
     } catch {}
+  }, []);
+
+  const handleTransition = useCallback(async (thread_id, newEstado, note = '') => {
+    // Optimistic update immediately
+    setLocalItems(prev => prev.map(t => {
+      if (t.thread_id !== thread_id) return t;
+      const updates = { estado: newEstado };
+      if (newEstado === 'solucionado') updates.severity = 'none';
+      if (newEstado === 'archivado')   updates.severity = 'none';
+      if (newEstado === 'informativo') { updates.severity = 'none'; updates.is_informativo = 1; }
+      if (newEstado === 'requiere_mi_accion') { updates.severity = 'high'; updates.last_sender_is_me = 0; }
+      if (newEstado === 'esperando_cliente')  { updates.last_sender_is_me = 1; }
+      if (newEstado === 'pendiente') { updates.last_sender_is_me = 0; }
+      return { ...t, ...updates };
+    }));
+    try {
+      await fetch(`${API}/mail/thread/${thread_id}/transition`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ estado: newEstado, note }),
+      });
+    } catch { /* silent — optimistic update stays */ }
   }, []);
 
   const handleFeedback = useCallback((thread) => {
@@ -778,6 +889,11 @@ export default function ClientActionList({ clientThreads }) {
         <InvestigatePanel onClose={() => setShowInvestigate(false)} />
       )}
 
+      {/* ── Rules panel ── */}
+      {showRules && (
+        <RulesPanel onClose={() => setShowRules(false)} />
+      )}
+
       {/* ── Header ── */}
       <div className="ctl-header">
         <div className="ctl-header-badges">
@@ -788,6 +904,13 @@ export default function ClientActionList({ clientThreads }) {
           <span className="ctl-summary-badge ctl-summary-gold">{clientThreads.waiting_client_response} esperando cliente</span>
         </div>
         <div className="ctl-header-actions">
+          <button
+            className="ctl-btn ctl-btn-rules"
+            onClick={() => setShowRules(v => !v)}
+            title="Ver reglas aprendidas y historial de feedback"
+          >
+            ⚙ Reglas
+          </button>
           <button
             className="ctl-btn ctl-btn-investigate"
             onClick={() => setShowInvestigate(v => !v)}
@@ -858,6 +981,7 @@ export default function ClientActionList({ clientThreads }) {
                 onResolve={handleResolve}
                 onJira={handleJira}
                 onFeedback={handleFeedback}
+                onTransition={handleTransition}
                 jiraStatus={jiraStatus[t.thread_id]}
               />
             ))

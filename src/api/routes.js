@@ -781,11 +781,44 @@ router.post('/mail/feedback/confirm', (req, res) => {
 
 router.get('/mail/learned-rules', (req, res) => {
   try {
-    const db = require('../db/database');
+    const db     = require('../db/database');
+    const yaml   = require('js-yaml');
+    const fs     = require('fs');
+    const rulesPath = require('path').join(__dirname, '../../config/rules.yml');
+    const rules  = yaml.load(fs.readFileSync(rulesPath, 'utf8'));
+    const sm     = rules.state_machine || {};
+
+    const learnedRules = db.getAllLearnedRules();
+    const feedback     = db.getFeedbackHistory(50);
+    const totalMatches = learnedRules.reduce((s, r) => s + (r.match_count || 0), 0);
+
     res.json({
-      rules: db.getAllLearnedRules(),
-      feedback_history: db.getFeedbackHistory(),
+      rules: learnedRules,
+      no_action_patterns: rules.mail?.no_action_patterns || [],
+      auto_rules: {
+        informativo_auto_archive_days:             sm.informativo_auto_archive_days || 7,
+        invoice_days_without_response_to_pending:  sm.invoice_rules?.days_without_response_to_pending || 15,
+        waiting_escalation_days:                   sm.waiting_escalation_days || 14,
+      },
+      feedback_history: feedback,
+      stats: {
+        total_rules:    learnedRules.length,
+        total_matches:  totalMatches,
+        total_feedback: feedback.length,
+      },
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/mail/learned-rules/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { active } = req.body;
+    const db = require('../db/database');
+    db.getDb().prepare('UPDATE learned_rules SET active = ? WHERE id = ?').run(active ? 1 : 0, Number(id));
+    res.json({ success: true, id: Number(id), active: !!active });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -921,6 +954,32 @@ router.post('/mail/investigate/add', async (req, res) => {
 
     db.logAction(thread_id, 'manually_added', { source: 'investigation' });
     res.json({ success: true, thread_id, estado: thread.estado, message: 'Thread re-escaneado y agregado al dashboard' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── State machine ───────────────────────────────────────────────────────────
+
+router.post('/mail/thread/:threadId/transition', (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const { estado, note } = req.body;
+    if (!estado) return res.status(400).json({ error: 'estado required' });
+    const sm = require('../skills/state-machine');
+    const result = sm.transition(threadId, estado, note || '');
+    if (result.error) return res.status(400).json(result);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/mail/auto-rules', async (req, res) => {
+  try {
+    const sm = require('../skills/state-machine');
+    const result = await sm.runAutoRules();
+    res.json({ success: true, ...result });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
