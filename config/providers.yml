@@ -1,0 +1,157 @@
+providers:
+  - name: "Amazon Web Services"
+    domains:
+      - "aws.amazon.com"
+      - "amazonaws.com"
+      - "amazon.com"
+      - "amazonses.com"
+    alert_keywords:
+      - "billing"
+      - "payment"
+      - "security"
+      - "suspended"
+      - "limit exceeded"
+      - "action required"
+      - "expiring"
+      - "factura"
+      - "cobro"
+    category: "infrastructure"
+
+  - name: "Google Cloud / Workspace"
+    domains:
+      - "google.com"
+      - "googleapis.com"
+      - "googledomains.com"
+      - "workspace.google.com"
+    alert_keywords:
+      - "billing"
+      - "security"
+      - "storage full"
+      - "suspended"
+      - "action required"
+      - "expiring"
+    category: "infrastructure"
+
+  - name: "GoDaddy"
+    domains:
+      - "godaddy.com"
+      - "secureserver.net"
+    alert_keywords:
+      - "expiring"
+      - "expired"
+      - "suspended"
+      - "renewal"
+      - "renovación"
+    category: "hosting"
+
+  - name: "cPanel / WHM"
+    domains:
+      - "cpanel.net"
+    alert_keywords:
+      - "disk"
+      - "quota"
+      - "suspended"
+      - "limit"
+    category: "hosting"
+
+  - name: "Cloudflare"
+    domains:
+      - "cloudflare.com"
+    alert_keywords:
+      - "attack"
+      - "suspended"
+      - "billing"
+      - "cert"
+    category: "infrastructure"
+
+  - name: "GitHub"
+    domains:
+      - "github.com"
+    alert_keywords:
+      - "security"
+      - "vulnerability"
+      - "billing"
+      - "suspended"
+    category: "development"
+
+  - name: "Transbank"
+    domains:
+      - "transbank.cl"
+    alert_keywords:
+      - "rechazado"
+      - "error"
+      - "suspendido"
+      - "bloqueado"
+    category: "payments"
+
+  - name: "Mercado Libre / Pago"
+    domains:
+      - "mercadolibre.cl"
+      - "mercadolibre.com"
+      - "mercadopago.cl"
+      - "mercadopago.com"
+    alert_keywords:
+      - "reclamo"
+      - "mediación"
+      - "mediacion"
+      - "suspensión"
+      - "bloqueo"
+      - "chargeback"
+    category: "marketplace"
+
+  - name: "Shopify"
+    domains:
+      - "shopify.com"
+      - "myshopify.com"
+    alert_keywords:
+      - "billing"
+      - "suspended"
+      - "limit"
+      - "chargeback"
+    category: "ecommerce"
+
+  - name: "PayPal"
+    domains:
+      - "paypal.com"
+    alert_keywords:
+      - "dispute"
+      - "chargeback"
+      - "suspended"
+      - "limit"
+      - "blocked"
+    category: "payments"
+
+  - name: "Banco / BCI / Santander / Chile"
+    domains:
+      - "bci.cl"
+      - "santander.cl"
+      - "bancochile.cl"
+      - "bancoestado.cl"
+      - "itau.cl"
+      - "scotiabank.cl"
+    alert_keywords:
+      - "alerta"
+      - "bloqueo"
+      - "fraude"
+      - "vencimiento"
+      - "deuda"
+    category: "banking"
+
+  - name: "Registros Chile / NIC"
+    domains:
+      - "nic.cl"
+      - "registro.cl"
+    alert_keywords:
+      - "vencimiento"
+      - "renovación"
+      - "suspensión"
+    category: "hosting"
+
+  - name: "Sii / Servicio Impuestos Internos"
+    domains:
+      - "sii.cl"
+    alert_keywords:
+      - "notificación"
+      - "requerimiento"
+      - "multa"
+    category: "government"

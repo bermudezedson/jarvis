@@ -298,6 +298,48 @@ router.get('/mail/client-threads', (req, res) => {
   }
 });
 
+// ─── Nuevos / sin catalogar (source_type = unknown) ──────────────────────────
+router.get('/mail/uncategorized', (req, res) => {
+  try {
+    const db    = require('../db/database');
+    const sqlDb = db.getDb();
+    const rows  = sqlDb.prepare(`
+      SELECT * FROM threads
+      WHERE source_type = 'unknown'
+        AND estado NOT IN ('solucionado','archivado')
+        AND ai_classification != 'spam'
+      ORDER BY
+        CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 ELSE 3 END,
+        date DESC
+      LIMIT 50
+    `).all();
+    const items = rows.map(r => ({
+      ...db.threadToApiFormat(r),
+      source_type:       r.source_type,
+      ai_classification: r.ai_classification,
+      is_new_contact:    !!r.is_new_contact,
+    }));
+    res.json({ items, total: items.length, last_universal_scan: db.getLastUniversalScan() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Last scan status ─────────────────────────────────────────────────────────
+router.get('/mail/scan-status', (req, res) => {
+  try {
+    const db  = require('../db/database');
+    const log = db.getLastScanLog('universal');
+    res.json({
+      last_universal_scan: db.getLastUniversalScan(),
+      last_client_scan:    db.getLastScan(),
+      last_log:            log,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/mail/client-scan', async (req, res) => {
   try {
     const { days = 30, mode = 'initial' } = req.body;
@@ -310,6 +352,88 @@ router.post('/mail/client-scan', async (req, res) => {
     res.json(result);
   } catch (err) {
     logger.error('Client scan failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Universal inbox scan ─────────────────────────────────────────────────
+router.post('/mail/universal-scan', async (req, res) => {
+  try {
+    const { timeWindowMinutes = 90 } = req.body || {};
+    const mailOps = require('../skills/mail-ops');
+    const result  = await mailOps.runUniversalScan({ timeWindowMinutes });
+    // Refresh DB summary after scan
+    const db = require('../db/database');
+    res.json({ ...result, inbox: db.getClientThreadsSummary(result.scan) });
+  } catch (err) {
+    logger.error('Universal scan failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Silenciar dominio ────────────────────────────────────────────────────
+router.post('/mail/silence-domain', (req, res) => {
+  try {
+    const { domain } = req.body;
+    if (!domain) return res.status(400).json({ error: 'domain required' });
+
+    const fs   = require('fs');
+    const path = require('path');
+    const yaml = require('js-yaml');
+
+    const rulesPath = path.join(__dirname, '../../config/rules.yml');
+    const rulesDoc  = yaml.load(fs.readFileSync(rulesPath, 'utf8'));
+
+    if (!rulesDoc.blacklist) rulesDoc.blacklist = { discard_domains: [], discard_subjects: [] };
+    if (!rulesDoc.blacklist.discard_domains) rulesDoc.blacklist.discard_domains = [];
+
+    const domainClean = domain.toLowerCase().trim();
+    if (!rulesDoc.blacklist.discard_domains.includes(domainClean)) {
+      rulesDoc.blacklist.discard_domains.push(domainClean);
+      fs.writeFileSync(rulesPath, yaml.dump(rulesDoc, { lineWidth: 120 }), 'utf8');
+    }
+
+    // Archive existing threads from this domain
+    const db      = require('../db/database');
+    const archived = db.archiveThreadsByDomain(domainClean);
+
+    logger.info('Domain silenced', { domain: domainClean, archived });
+    res.json({ success: true, domain: domainClean, archived });
+  } catch (err) {
+    logger.error('Silence domain failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Silenciar patrón de subject ──────────────────────────────────────────
+router.post('/mail/silence-pattern', (req, res) => {
+  try {
+    const { pattern } = req.body;
+    if (!pattern) return res.status(400).json({ error: 'pattern required' });
+
+    const fs   = require('fs');
+    const path = require('path');
+    const yaml = require('js-yaml');
+
+    const rulesPath = path.join(__dirname, '../../config/rules.yml');
+    const rulesDoc  = yaml.load(fs.readFileSync(rulesPath, 'utf8'));
+
+    if (!rulesDoc.blacklist) rulesDoc.blacklist = { discard_domains: [], discard_subjects: [] };
+    if (!rulesDoc.blacklist.discard_subjects) rulesDoc.blacklist.discard_subjects = [];
+
+    const patternClean = pattern.trim();
+    if (!rulesDoc.blacklist.discard_subjects.includes(patternClean)) {
+      rulesDoc.blacklist.discard_subjects.push(patternClean);
+      fs.writeFileSync(rulesPath, yaml.dump(rulesDoc, { lineWidth: 120 }), 'utf8');
+    }
+
+    const db      = require('../db/database');
+    const archived = db.archiveThreadsBySubjectPattern(patternClean);
+
+    logger.info('Pattern silenced', { pattern: patternClean, archived });
+    res.json({ success: true, pattern: patternClean, archived });
+  } catch (err) {
+    logger.error('Silence pattern failed', { error: err.message });
     res.status(500).json({ error: err.message });
   }
 });

@@ -315,8 +315,41 @@ async function healthCheck() {
   }
 }
 
+/**
+ * Universal inbox scan — fetches ALL threads with activity in the last N minutes.
+ * Only downloads metadata (no body), dedup happens in SQLite by thread_id.
+ *
+ * @param {{ timeWindowMinutes?: number }} options
+ */
+async function universalInboxScan({ timeWindowMinutes = 90 } = {}) {
+  // Use 2h window minimum to compensate Gmail indexing delays; overlap is fine
+  // because SQLite deduplicates by thread_id + content_hash
+  const hours = Math.max(2, Math.ceil(timeWindowMinutes / 60));
+  logger.info('Universal inbox scan', { skill: SKILL, hours });
+
+  const allThreads = [];
+
+  // All threads with inbox activity (read + unread, from any sender)
+  allThreads.push(...await fetchThreads(`in:inbox newer_than:${hours}h`, 200));
+
+  // Also grab sent threads (so we catch conversations where CEO wrote last)
+  allThreads.push(...await fetchThreads(`in:sent newer_than:${hours}h`, 100));
+
+  // Deduplicate by thread id
+  const seen = new Set();
+  const unique = allThreads.filter(t => {
+    if (seen.has(t.id)) return false;
+    seen.add(t.id);
+    return true;
+  });
+
+  logger.info('Universal scan fetched', { skill: SKILL, total: unique.length });
+  return unique;
+}
+
 module.exports = {
-  getUnreadThreads, getClientThreads, getSentEmails, searchThreads, getThread,
+  getUnreadThreads, getClientThreads, universalInboxScan,
+  getSentEmails, searchThreads, getThread,
   getFullThread, sendReply,
   listLabels, applyLabel, removeLabel, createLabel, createDraft,
   reportPhishing, healthCheck,

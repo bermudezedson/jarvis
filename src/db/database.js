@@ -151,6 +151,21 @@ function initTables() {
     );
   `);
 
+  // scan_log table — tracks every universal/client/refresh scan
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scan_log (
+      id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+      scan_type                TEXT NOT NULL,
+      started_at               TEXT NOT NULL,
+      finished_at              TEXT,
+      threads_found            INTEGER DEFAULT 0,
+      threads_new              INTEGER DEFAULT 0,
+      threads_discarded        INTEGER DEFAULT 0,
+      threads_classified_by_ai INTEGER DEFAULT 0,
+      errors                   TEXT
+    );
+  `);
+
   // Add new columns to threads if they don't exist yet (idempotent migration)
   const alterStatements = [
     `ALTER TABLE threads ADD COLUMN last_sender_is_team INTEGER DEFAULT 0`,
@@ -161,6 +176,9 @@ function initTables() {
     `ALTER TABLE messages ADD COLUMN is_from_team INTEGER DEFAULT 0`,
     `ALTER TABLE threads ADD COLUMN ai_summary TEXT DEFAULT NULL`,
     `ALTER TABLE threads ADD COLUMN summary_generated_at TEXT DEFAULT NULL`,
+    `ALTER TABLE threads ADD COLUMN source_type TEXT DEFAULT 'unknown'`,
+    `ALTER TABLE threads ADD COLUMN ai_classification TEXT DEFAULT NULL`,
+    `ALTER TABLE threads ADD COLUMN is_new_contact INTEGER DEFAULT 0`,
   ];
   for (const sql of alterStatements) {
     try { db.exec(sql); } catch { /* column already exists */ }
@@ -629,6 +647,97 @@ function setLastScan() {
   db.prepare(`INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_scan_at', datetime('now'))`).run();
 }
 
+function getLastUniversalScan() {
+  const db = getDb();
+  try {
+    return db.prepare(`SELECT value FROM metadata WHERE key = 'last_universal_scan_at'`).get()?.value || null;
+  } catch { return null; }
+}
+
+function setLastUniversalScan() {
+  const db = getDb();
+  db.prepare(`INSERT OR REPLACE INTO metadata (key, value) VALUES ('last_universal_scan_at', datetime('now'))`).run();
+}
+
+// ─── Scan log ──────────────────────────────────────────────────────────────
+
+function startScanLog(scanType) {
+  const db = getDb();
+  const result = db.prepare(`
+    INSERT INTO scan_log (scan_type, started_at)
+    VALUES (?, datetime('now'))
+  `).run(scanType);
+  return result.lastInsertRowid;
+}
+
+function finishScanLog(logId, stats = {}) {
+  const db = getDb();
+  db.prepare(`
+    UPDATE scan_log SET
+      finished_at              = datetime('now'),
+      threads_found            = ?,
+      threads_new              = ?,
+      threads_discarded        = ?,
+      threads_classified_by_ai = ?,
+      errors                   = ?
+    WHERE id = ?
+  `).run(
+    stats.threads_found            || 0,
+    stats.threads_new              || 0,
+    stats.threads_discarded        || 0,
+    stats.threads_classified_by_ai || 0,
+    stats.errors ? JSON.stringify(stats.errors) : null,
+    logId,
+  );
+}
+
+function getLastScanLog(scanType) {
+  const db = getDb();
+  return db.prepare(`
+    SELECT * FROM scan_log
+    WHERE scan_type = ?
+    ORDER BY id DESC LIMIT 1
+  `).get(scanType) || null;
+}
+
+// ─── Silence helpers ───────────────────────────────────────────────────────
+
+function archiveThreadsByDomain(domain) {
+  const db = getDb();
+  const threads = db.prepare(`
+    SELECT thread_id FROM threads
+    WHERE (last_from_email LIKE ? OR original_from LIKE ?)
+    AND estado NOT IN ('solucionado','archivado')
+  `).all(`%@${domain}`, `%@${domain}`);
+  let count = 0;
+  for (const t of threads) {
+    db.prepare(`
+      UPDATE threads SET estado = 'archivado', archived_at = datetime('now'), updated_at = datetime('now')
+      WHERE thread_id = ?
+    `).run(t.thread_id);
+    count++;
+  }
+  return count;
+}
+
+function archiveThreadsBySubjectPattern(pattern) {
+  const db = getDb();
+  const threads = db.prepare(`
+    SELECT thread_id FROM threads
+    WHERE lower(subject) LIKE lower(?)
+    AND estado NOT IN ('solucionado','archivado')
+  `).all(`%${pattern}%`);
+  let count = 0;
+  for (const t of threads) {
+    db.prepare(`
+      UPDATE threads SET estado = 'archivado', archived_at = datetime('now'), updated_at = datetime('now')
+      WHERE thread_id = ?
+    `).run(t.thread_id);
+    count++;
+  }
+  return count;
+}
+
 function init() {
   getDb(); // triggers initTables
 }
@@ -643,6 +752,9 @@ module.exports = {
   saveDraft, markDraftSent, getLastDraftId,
   getResolutionMetrics,
   getLastScan, setLastScan,
+  getLastUniversalScan, setLastUniversalScan,
+  startScanLog, finishScanLog, getLastScanLog,
+  archiveThreadsByDomain, archiveThreadsBySubjectPattern,
   threadToApiFormat,
   saveFeedback, saveLearnedRule, findLearnedRule, getAllLearnedRules, getFeedbackHistory,
   upsertContact, getContact, getContactsByClient, getAllContacts, seedContactsFromConfig,

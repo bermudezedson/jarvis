@@ -777,4 +777,299 @@ ${conversationText}`,
   return summary;
 }
 
-module.exports = { classify, classifyClientThreads, applyLabels, classifyThread, CATEGORIES, generateSummaryForThread };
+// ─── Universal inbox scan pipeline ───────────────────────────────────────────
+
+let _providersConfig = null;
+function loadProviders() {
+  if (_providersConfig) return _providersConfig;
+  try {
+    const yaml = require('js-yaml');
+    const fs   = require('fs');
+    const p    = require('path');
+    _providersConfig = yaml.load(fs.readFileSync(p.join(__dirname, '../../config/providers.yml'), 'utf8'));
+  } catch { _providersConfig = { providers: [] }; }
+  return _providersConfig;
+}
+
+function matchProvider(domain) {
+  const { providers } = loadProviders();
+  if (!domain) return null;
+  const d = domain.toLowerCase();
+  return providers.find(p => p.domains.some(pd => d === pd || d.endsWith('.' + pd))) || null;
+}
+
+function mergeBlacklist() {
+  // Merge rules.yml mail.* with blacklist.* (blacklist is alias / addendum)
+  const bl = rules.blacklist || {};
+  return {
+    discard_domains:    [...(rules.mail.spam_domains    || []), ...(bl.discard_domains    || [])],
+    discard_subjects:   [...(rules.mail.exclude_patterns || []), ...(bl.discard_subjects  || [])],
+    informativo_subjects: [...(rules.mail.no_action_patterns || [])],
+  };
+}
+
+/** Classify an unknown thread with Haiku — minimal prompt, minimal tokens. */
+async function aiClassifyUnknown(thread) {
+  try {
+    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const msg = await client.messages.create({
+      model:      'claude-haiku-4-5-20251001',
+      max_tokens: 20,
+      messages: [{
+        role: 'user',
+        content: `Clasifica este email en UNA de estas categorías: prospecto_nuevo, proveedor, plataforma, personal, spam.
+
+De: ${thread.from || thread.last_from}
+Asunto: ${thread.subject}
+Snippet: ${(thread.snippet || '').substring(0, 200)}
+
+Responde SOLO con la categoría, sin explicación.`,
+      }],
+    });
+    const raw = (msg.content[0].text || '').trim().toLowerCase();
+    const valid = ['prospecto_nuevo', 'proveedor', 'plataforma', 'personal', 'spam'];
+    return valid.find(v => raw.includes(v)) || 'plataforma';
+  } catch (e) {
+    logger.debug('AI classify failed', { SKILL, error: e.message });
+    return null;
+  }
+}
+
+/**
+ * Process threads from universalInboxScan through the blacklist pipeline.
+ * Returns scan stats.
+ */
+async function processUniversalScan(threads) {
+  const db          = require('../db/database');
+  const blacklist   = mergeBlacklist();
+  const teamDomains = (rules.team?.domains || []).map(d => d.toLowerCase());
+  const ceoEmails   = (rules.team?.ceo_emails || []).map(e => e.toLowerCase());
+  const sqlDb       = db.getDb();
+
+  const stats = {
+    threads_found:            threads.length,
+    threads_new:              0,
+    threads_discarded:        0,
+    threads_classified_by_ai: 0,
+    breakdown:                { client: 0, provider: 0, prospecto_nuevo: 0, plataforma: 0,
+                                personal: 0, internal: 0, informativo_auto: 0, discarded: 0 },
+  };
+
+  for (const t of threads) {
+    const fromEmail  = (t.last_from_email || '').toLowerCase();
+    const fromDomain = fromEmail.split('@')[1] || '';
+    const subjectLow = (t.subject || '').toLowerCase();
+
+    // ── Paso 1: Descarte rápido ──────────────────────────────────────────────
+
+    // Skip if terminal state in SQLite
+    const existing = sqlDb.prepare('SELECT estado, content_hash FROM threads WHERE thread_id = ?').get(t.id);
+    if (existing?.estado === 'solucionado' || existing?.estado === 'archivado') {
+      stats.threads_discarded++;
+      continue;
+    }
+
+    // Discard domains (spam_domains + blacklist.discard_domains)
+    if (blacklist.discard_domains.some(d => fromDomain === d || fromDomain.endsWith('.' + d))) {
+      stats.threads_discarded++;
+      stats.breakdown.discarded++;
+      continue;
+    }
+
+    // Discard subjects (exclude_patterns + blacklist.discard_subjects)
+    if (blacklist.discard_subjects.some(p => subjectLow.includes(p.toLowerCase()))) {
+      stats.threads_discarded++;
+      stats.breakdown.discarded++;
+      continue;
+    }
+
+    // Check learned rules
+    const learnedRule = db.findLearnedRule(t.subject, fromEmail);
+
+    // Informativo subjects
+    const isNoAction = blacklist.informativo_subjects.some(p => subjectLow.includes(p.toLowerCase()));
+
+    // Content hash for dedup
+    const currentHash = `${t.message_count}:${fromEmail}:${t.date || ''}`;
+    if (existing && existing.content_hash === currentHash) {
+      // No changes — skip
+      continue;
+    }
+
+    // ── Paso 2: Identificación de origen ────────────────────────────────────
+
+    let sourceType      = 'unknown';
+    let aiClassification = null;
+    let client          = null;
+    let provider        = null;
+    let isNewContact    = false;
+
+    // Internal (team) domain
+    if (teamDomains.some(d => fromDomain === d || fromDomain.endsWith('.' + d))) {
+      sourceType = 'internal';
+    } else {
+      // Known client?
+      client = matchClient(fromDomain, fromEmail);
+      if (!client) {
+        // Check participants for client domain
+        for (const email of (t.participants || [])) {
+          const d2 = email.split('@')[1];
+          client = matchClient(d2, email);
+          if (client) break;
+        }
+      }
+      if (client) {
+        sourceType = 'client';
+      } else {
+        // Known provider?
+        provider = matchProvider(fromDomain);
+        if (provider) {
+          sourceType = 'provider';
+        } else {
+          sourceType = 'unknown';
+          isNewContact = true;
+        }
+      }
+    }
+
+    // ── Paso 3: Clasificación IA (solo unknowns sin regla aprendida) ─────────
+
+    if (sourceType === 'unknown' && !learnedRule && !isNoAction && process.env.ANTHROPIC_API_KEY) {
+      aiClassification = await aiClassifyUnknown(t);
+      stats.threads_classified_by_ai++;
+      if (aiClassification === 'spam') {
+        stats.threads_discarded++;
+        stats.breakdown.discarded++;
+        continue; // Don't persist spam
+      }
+    }
+
+    // ── Paso 4: Routing — determine estado, severity, category ───────────────
+
+    const daysSince       = Math.max(0, Math.floor((Date.now() - new Date(t.date).getTime()) / 86400000));
+    const lastSenderIsCeo  = ceoEmails.includes(fromEmail);
+    const lastSenderIsTeam = teamDomains.some(d => fromDomain === d || fromDomain.endsWith('.' + d));
+    const lastSenderIsUs   = lastSenderIsCeo || lastSenderIsTeam;
+
+    let estado, category, severity, isInformativo;
+
+    if (learnedRule) {
+      estado        = learnedRule.correct_estado;
+      category      = learnedRule.correct_category;
+      severity      = learnedRule.correct_severity || 'none';
+      isInformativo = estado === 'informativo';
+    } else if (isNoAction) {
+      estado = 'informativo'; category = 'informativo'; severity = 'none'; isInformativo = true;
+      stats.breakdown.informativo_auto++;
+    } else if (sourceType === 'internal') {
+      estado = 'informativo'; category = 'interno'; severity = 'none'; isInformativo = true;
+      stats.breakdown.internal++;
+    } else if (sourceType === 'provider') {
+      // Provider: informativo unless has alert keyword
+      const isAlert = (provider.alert_keywords || []).some(kw =>
+        subjectLow.includes(kw.toLowerCase()) || (t.snippet || '').toLowerCase().includes(kw.toLowerCase())
+      );
+      if (isAlert) {
+        estado = 'requiere_mi_accion'; category = 'alerta_proveedor'; severity = 'high'; isInformativo = false;
+      } else {
+        estado = 'informativo'; category = 'proveedor'; severity = 'none'; isInformativo = true;
+      }
+      stats.breakdown.provider++;
+    } else if (sourceType === 'client') {
+      estado        = calculateEstado(!lastSenderIsUs, daysSince);
+      category      = lastSenderIsUs ? 'esperando_respuesta' : 'requiere_accion';
+      severity      = calculateSeverity(!lastSenderIsUs, daysSince);
+      isInformativo = false;
+      stats.breakdown.client++;
+    } else {
+      // unknown — route by AI classification
+      const cls = aiClassification || 'plataforma';
+      if (cls === 'prospecto_nuevo') {
+        estado = 'requiere_mi_accion'; category = 'prospecto_nuevo'; severity = 'medium'; isInformativo = false;
+        stats.breakdown.prospecto_nuevo++;
+      } else if (cls === 'personal') {
+        estado = 'informativo'; category = 'personal'; severity = 'none'; isInformativo = true;
+        stats.breakdown.personal++;
+      } else {
+        // plataforma / proveedor clasificado por IA
+        estado = 'informativo'; category = cls; severity = 'none'; isInformativo = true;
+        stats.breakdown.plataforma++;
+      }
+    }
+
+    // ── Persist ──────────────────────────────────────────────────────────────
+
+    const threadData = {
+      thread_id:           t.id,
+      subject:             t.subject,
+      original_from:       t.from,
+      last_from:           t.last_from,
+      last_from_email:     fromEmail,
+      snippet:             t.snippet,
+      message_count:       t.message_count,
+      participants:        t.participants || [],
+      date:                t.date,
+      original_date:       t.original_date,
+      last_sender_is_me:   lastSenderIsCeo,
+      last_sender_is_team: lastSenderIsTeam,
+      is_informativo:      isInformativo,
+      category,
+      estado,
+      severity,
+      client_name:         client?.name        || provider?.name        || null,
+      client_domain:       client?.domains?.[0] || fromDomain           || null,
+      client_empresa:      client ? (Array.isArray(client.empresa) ? client.empresa.join(',') : client.empresa) : null,
+      client_jira_label:   client?.jira_label  || null,
+      accion_sugerida:     isInformativo ? 'archivar' : lastSenderIsUs ? 'seguimiento' : 'responder',
+      jira_suggested:      !isInformativo && daysSince > 7,
+      content_hash:        currentHash,
+    };
+
+    // Inject universal-scan extra fields via direct SQL after upsert
+    db.upsertThread(threadData);
+
+    sqlDb.prepare(`
+      UPDATE threads SET
+        source_type       = ?,
+        ai_classification = ?,
+        is_new_contact    = ?
+      WHERE thread_id = ?
+    `).run(sourceType, aiClassification, isNewContact ? 1 : 0, t.id);
+
+    if (!existing) stats.threads_new++;
+  }
+
+  db.setLastScan();
+  db.setLastUniversalScan();
+
+  return stats;
+}
+
+/**
+ * Entry point for the universal scan cron/endpoint.
+ */
+async function runUniversalScan({ timeWindowMinutes = 90 } = {}) {
+  const db      = require('../db/database');
+  const gmail   = require('../mcp/gmail');
+  const logId   = db.startScanLog('universal');
+  const errors  = [];
+
+  try {
+    const threads = await gmail.universalInboxScan({ timeWindowMinutes });
+    const stats   = await processUniversalScan(threads);
+    db.finishScanLog(logId, stats);
+    logger.info('Universal scan complete', { SKILL, ...stats });
+    return { success: true, scan: stats };
+  } catch (err) {
+    errors.push(err.message);
+    db.finishScanLog(logId, { errors });
+    logger.error('Universal scan failed', { SKILL, error: err.message });
+    return { success: false, error: err.message };
+  }
+}
+
+module.exports = {
+  classify, classifyClientThreads, applyLabels, classifyThread, CATEGORIES,
+  generateSummaryForThread, runUniversalScan,
+};

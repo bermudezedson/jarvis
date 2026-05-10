@@ -323,7 +323,7 @@ function MoveToDropdown({ t, isInformativo, onTransition }) {
 
 const INITIAL_MESSAGES = 3;
 
-function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, jiraStatus, isInformativo = false }) {
+function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, onSilenceDomain, onSilencePattern, jiraStatus, isInformativo = false }) {
   const [expanded,       setExpanded]       = useState(false);
   const [messages,       setMessages]       = useState(null);
   const [loadingMsgs,    setLoadingMsgs]    = useState(false);
@@ -441,6 +441,8 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, 
             <span>{t.message_count} {t.message_count === 1 ? 'msg' : 'msgs'}</span>
             {!isInformativo && t.jira_suggested && <><span className="ctl-sep">·</span><span className="ctl-jira-hint">→ Jira</span></>}
           </div>
+          {/* AI classification badge for unknown/new threads */}
+          {t.ai_classification && <AiClassBadge cls={t.ai_classification} />}
           {/* AI summary line */}
           {summary && <div className="thread-summary">{summary}</div>}
           {summaryLoading && <div className="thread-summary loading">Generando resumen...</div>}
@@ -564,6 +566,15 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, 
               title="Corregir clasificación — enseñar a Jarvis">
               ✎ Corregir
             </button>
+
+            {/* Silenciar — fast-path blacklist training */}
+            {onSilenceDomain && (
+              <button className="ctl-btn ctl-btn-silence"
+                title={`Silenciar dominio ${(t.last_from_email || '').split('@')[1] || ''} para siempre`}
+                onClick={e => { e.stopPropagation(); onSilenceDomain(t); }}>
+                🔇
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -723,9 +734,24 @@ const FILTER_TABS = [
   { id: 'pending',     label: 'Pendientes' },
   { id: 'waiting',     label: 'Esperando' },
   { id: 'informativo', label: 'Informativos' },
+  { id: 'nuevos',      label: 'Nuevos' },
   { id: 'solucionado', label: 'Solucionados' },
   { id: 'archived',    label: 'Archivados' },
 ];
+
+const AI_CLASS_LABELS = {
+  prospecto_nuevo: { label: 'Posible cliente', cls: 'badge-prospecto' },
+  proveedor:       { label: 'Proveedor',        cls: 'badge-proveedor' },
+  plataforma:      { label: 'Plataforma',       cls: 'badge-plataforma' },
+  personal:        { label: 'Personal',         cls: 'badge-personal' },
+  alerta_proveedor:{ label: 'Alerta proveedor', cls: 'badge-alerta' },
+};
+
+function AiClassBadge({ cls }) {
+  const info = AI_CLASS_LABELS[cls];
+  if (!info) return null;
+  return <span className={`ai-class-badge ${info.cls}`}>{info.label}</span>;
+}
 
 export default function ClientActionList({ clientThreads }) {
   const [localItems,    setLocalItems]    = useState([]);
@@ -738,6 +764,9 @@ export default function ClientActionList({ clientThreads }) {
   const [showRules,           setShowRules]           = useState(false);
   const [summaryBatchMsg,     setSummaryBatchMsg]     = useState(null);
   const [summaryBatchLoading, setSummaryBatchLoading] = useState(false);
+  const [uncategorized,       setUncategorized]       = useState(null);
+  const [uncatLoading,        setUncatLoading]        = useState(false);
+  const [silenceMsg,          setSilenceMsg]          = useState(null);
 
   useEffect(() => {
     if (clientThreads?.items) setLocalItems(clientThreads.items);
@@ -755,6 +784,18 @@ export default function ClientActionList({ clientThreads }) {
         .finally(() => setClosedLoading(false));
     }
   }, [activeFilter]);
+
+  // Lazy load uncategorized threads when "Nuevos" tab is activated
+  useEffect(() => {
+    if (activeFilter === 'nuevos' && uncategorized === null) {
+      setUncatLoading(true);
+      fetch(`${API}/mail/uncategorized`)
+        .then(r => r.json())
+        .then(data => setUncategorized(data.items || []))
+        .catch(() => setUncategorized([]))
+        .finally(() => setUncatLoading(false));
+    }
+  }, [activeFilter, uncategorized]);
 
   const handleArchive = useCallback(async (thread_id) => {
     setLocalItems(prev =>
@@ -802,6 +843,45 @@ export default function ClientActionList({ clientThreads }) {
         body:    JSON.stringify({ estado: newEstado, note }),
       });
     } catch { /* silent — optimistic update stays */ }
+  }, []);
+
+  const handleSilenceDomain = useCallback(async (thread) => {
+    const email  = thread.last_from_email || thread.from || '';
+    const domain = email.split('@')[1];
+    if (!domain) return;
+    if (!window.confirm(`¿Silenciar dominio "${domain}" para siempre? Se archivarán todos sus hilos.`)) return;
+    try {
+      const res  = await fetch(`${API}/mail/silence-domain`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain }),
+      });
+      const data = await res.json();
+      // Remove silenced threads from local state
+      setLocalItems(prev => prev.filter(t => !(t.last_from_email || '').endsWith(`@${domain}`)));
+      setUncategorized(prev => prev ? prev.filter(t => !(t.last_from_email || '').endsWith(`@${domain}`)) : prev);
+      setSilenceMsg(`Dominio ${domain} silenciado. ${data.archived || 0} hilos archivados.`);
+      setTimeout(() => setSilenceMsg(null), 5000);
+    } catch { setSilenceMsg('Error al silenciar dominio'); setTimeout(() => setSilenceMsg(null), 3000); }
+  }, []);
+
+  const handleSilencePattern = useCallback(async (thread) => {
+    const subject = thread.subject || '';
+    // Propose pattern: first meaningful words
+    const words   = subject.split(/\s+/).slice(0, 4).join(' ');
+    const pattern = window.prompt('Patrón a silenciar (aparece en el asunto):', words);
+    if (!pattern) return;
+    try {
+      const res  = await fetch(`${API}/mail/silence-pattern`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pattern }),
+      });
+      const data = await res.json();
+      const patLow = pattern.toLowerCase();
+      setLocalItems(prev => prev.filter(t => !(t.subject || '').toLowerCase().includes(patLow)));
+      setUncategorized(prev => prev ? prev.filter(t => !(t.subject || '').toLowerCase().includes(patLow)) : prev);
+      setSilenceMsg(`Patrón "${pattern}" silenciado. ${data.archived || 0} hilos archivados.`);
+      setTimeout(() => setSilenceMsg(null), 5000);
+    } catch { setSilenceMsg('Error al silenciar patrón'); setTimeout(() => setSilenceMsg(null), 3000); }
   }, []);
 
   const handleFeedback = useCallback((thread) => {
@@ -855,6 +935,7 @@ export default function ClientActionList({ clientThreads }) {
     pending:     pending.length,
     waiting:     waiting.length,
     informativo: informativos.length,
+    nuevos:      uncategorized?.length ?? '?',
     solucionado: clientThreads.by_estado?.solucionado ?? '—',
     archived:    clientThreads.by_estado?.archivado   ?? '—',
   };
@@ -865,6 +946,7 @@ export default function ClientActionList({ clientThreads }) {
   if (activeFilter === 'pending')     { visibleItems = pending; }
   if (activeFilter === 'waiting')     { visibleItems = waiting; }
   if (activeFilter === 'informativo') { visibleItems = informativos; visibleType = 'informativo'; }
+  if (activeFilter === 'nuevos')      { visibleItems = uncategorized || []; visibleType = 'nuevos'; }
   if (activeFilter === 'solucionado') { visibleItems = closedItems?.solucionado || []; visibleType = 'solucionado'; }
   if (activeFilter === 'archived')    { visibleItems = closedItems?.archived    || []; visibleType = 'archived'; }
 
@@ -942,6 +1024,7 @@ export default function ClientActionList({ clientThreads }) {
         </div>
       </div>
       {summaryBatchMsg && <div className="ctl-batch-msg">{summaryBatchMsg}</div>}
+      {silenceMsg     && <div className="ctl-batch-msg ctl-silence-msg">{silenceMsg}</div>}
 
       {/* ── Filter tabs ── */}
       <div className="ctl-filters">
@@ -961,12 +1044,15 @@ export default function ClientActionList({ clientThreads }) {
       <div className="ctl-list">
         {closedLoading && <div className="ctl-list-empty">Cargando...</div>}
 
-        {!closedLoading && visibleItems.length === 0 && (
+        {(closedLoading || uncatLoading) && <div className="ctl-list-empty">Cargando...</div>}
+
+        {!closedLoading && !uncatLoading && visibleItems.length === 0 && (
           <div className="ctl-list-empty">
             {activeFilter === 'urgente'     && '✓ Sin correos urgentes de clientes.'}
             {activeFilter === 'pending'     && '✓ Sin correos pendientes.'}
             {activeFilter === 'waiting'     && 'Sin hilos en espera de respuesta.'}
-            {activeFilter === 'informativo'  && '✓ Sin correos informativos (facturas, notificaciones).'}
+            {activeFilter === 'informativo' && '✓ Sin correos informativos (facturas, notificaciones).'}
+            {activeFilter === 'nuevos'      && '✓ Sin correos nuevos sin catalogar. Haz clic en ↻ Actualizar para escanear.'}
             {activeFilter === 'solucionado' && 'Sin threads solucionados aún.'}
             {activeFilter === 'archived'    && 'Sin threads archivados.'}
           </div>
@@ -982,6 +1068,8 @@ export default function ClientActionList({ clientThreads }) {
                 onJira={handleJira}
                 onFeedback={handleFeedback}
                 onTransition={handleTransition}
+                onSilenceDomain={handleSilenceDomain}
+                onSilencePattern={handleSilencePattern}
                 jiraStatus={jiraStatus[t.thread_id]}
               />
             ))
@@ -994,11 +1082,29 @@ export default function ClientActionList({ clientThreads }) {
                   onResolve={handleResolve}
                   onJira={handleJira}
                   onFeedback={handleFeedback}
+                  onTransition={handleTransition}
+                  onSilenceDomain={handleSilenceDomain}
                   jiraStatus={jiraStatus[t.thread_id]}
                   isInformativo={true}
                 />
               ))
-            : visibleItems.map(t => <ClosedRow key={t.thread_id} t={t} tipo={visibleType} />)
+            : visibleType === 'nuevos'
+              ? visibleItems.map(t => (
+                  <ThreadRow
+                    key={t.thread_id}
+                    t={t}
+                    onArchive={handleArchive}
+                    onResolve={handleResolve}
+                    onJira={handleJira}
+                    onFeedback={handleFeedback}
+                    onTransition={handleTransition}
+                    onSilenceDomain={handleSilenceDomain}
+                    onSilencePattern={handleSilencePattern}
+                    jiraStatus={jiraStatus[t.thread_id]}
+                    isInformativo={t.estado === 'informativo'}
+                  />
+                ))
+              : visibleItems.map(t => <ClosedRow key={t.thread_id} t={t} tipo={visibleType} />)
         }
       </div>
 

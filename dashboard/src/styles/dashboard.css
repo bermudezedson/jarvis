@@ -1532,3 +1532,36 @@ html, body, #root { height: 100%; background: var(--bg); color: var(--text); fon
 .rules-fb-from  { color: #f87171; }
 .rules-fb-to    { color: #4ade80; }
 .rules-fb-note  { color: var(--muted); font-style: italic; flex: 1; min-width: 100%; margin-top: 2px; }
+
+/* ─── Universal scan — AI class badges ──────────────────────────────────── */
+.ai-class-badge {
+  display: inline-block; font-size: 10px; font-weight: 600;
+  border-radius: 4px; padding: 2px 7px; margin-right: 5px;
+  text-transform: uppercase; letter-spacing: .4px;
+}
+.badge-prospecto  { background: rgba(168,85,247,.2);  color: #c084fc; border: 1px solid rgba(168,85,247,.3); }
+.badge-proveedor  { background: rgba(59,130,246,.15); color: #60a5fa; border: 1px solid rgba(59,130,246,.25); }
+.badge-plataforma { background: rgba(107,114,128,.15); color: #9ca3af; border: 1px solid rgba(107,114,128,.25); }
+.badge-personal   { background: rgba(16,185,129,.15); color: #34d399; border: 1px solid rgba(16,185,129,.25); }
+.badge-alerta     { background: rgba(239,68,68,.15);  color: #f87171; border: 1px solid rgba(239,68,68,.3); }
+
+/* ─── Silenciar button ───────────────────────────────────────────────────── */
+.ctl-btn-silence {
+  background: transparent; border: 1px solid rgba(107,114,128,.3);
+  color: #6b7280; border-radius: 5px; padding: 4px 7px;
+  font-size: 13px; cursor: pointer; transition: all .15s;
+}
+.ctl-btn-silence:hover { background: rgba(239,68,68,.1); border-color: #f87171; color: #f87171; }
+
+/* ─── Silence toast ──────────────────────────────────────────────────────── */
+.ctl-silence-msg {
+  background: rgba(239,68,68,.12) !important;
+  border-color: rgba(239,68,68,.3) !important;
+  color: #f87171 !important;
+}
+
+/* ─── Nuevos tab highlight ───────────────────────────────────────────────── */
+.ctl-filter-tab[data-id="nuevos"] .ctl-filter-count,
+.ctl-filter-tab:nth-child(5) .ctl-filter-count {
+  background: rgba(168,85,247,.2); color: #c084fc;
+}

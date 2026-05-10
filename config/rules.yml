@@ -123,6 +123,16 @@ client_scan:
   incremental_cron: "0 */4 * * *"      # Cada 4 horas (llama a Gmail)
   refresh_states_cron: "*/30 * * * *"  # Cada 30 min (recalcula sin costo)
   initial_days: 30                      # Ventana del escaneo inicial
+  universal_cron: "0 * * * *"          # Universal scan: cada hora en punto
+
+# Blacklist consolidada — alias de los campos dispersos en mail.*
+# Al cargar rules.yml, código mergea discard_domains con spam_domains, etc.
+blacklist:
+  # Dominios que se descartan SIEMPRE — alias de mail.spam_domains
+  discard_domains: []   # se puebla dinámicamente por "Silenciar dominio"
+
+  # Patrones de asunto que se descartan — alias de mail.exclude_patterns
+  discard_subjects: []  # se puebla dinámicamente por "Silenciar patrón"
 
 state_machine:
   informativo_auto_archive_days: 7
