@@ -1,6 +1,6 @@
 {
   "name": "jarvis",
-  "version": "1.0.0",
+  "version": "0.6.1",
   "description": "CEO Cockpit Agent — daily briefing + executive dashboard",
   "main": "src/index.js",
   "scripts": {
