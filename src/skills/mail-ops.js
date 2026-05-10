@@ -13,8 +13,10 @@ const clientsConfig = yaml.load(fs.readFileSync(path.join(__dirname, '../../conf
 const CATEGORIES = {
   SOLICITUD_CLIENTE:  'solicitud_cliente',   // Client needs action/response
   SEGUIMIENTO:        'seguimiento',          // Needs follow-up
-  FACTURA:            'factura',              // Invoice / billing
+  FACTURA:            'factura',              // Invoice / billing received (you owe)
   CUENTA_POR_PAGAR:   'cuenta_por_pagar',    // Subscription/service with payment failure
+  PAGO_RECIBIDO:      'pago_recibido',       // Payment confirmation — client paid you
+  COBRO_PENDIENTE:    'cobro_pendiente',     // Client owes YOU money — collect
   ESTAFA:             'estafa',              // Phishing / scam (brand impersonation)
   ENVIO:              'envio',               // Shipping / package tracking
   SUSCRIPCION:        'suscripcion',          // Newsletter / marketing
@@ -122,7 +124,18 @@ function classifyThread(t) {
     return build(t, CATEGORIES.NOTIFICACION, 'low', null, { accion: 'archivar' });
   }
 
-  // 7. Invoice / billing
+  // 7. Payment received — client paid you (Transbank, Fintoc, transfer confirmation)
+  if (isPaymentReceived(text, fromDomain)) {
+    return build(t, CATEGORIES.PAGO_RECIBIDO, 'low', client, { accion: 'archivar' });
+  }
+
+  // 7b. Cobro pendiente — someone (client or supplier) has an outstanding amount
+  if (isCobroPendiente(text)) {
+    const severity = client ? 'high' : 'medium';
+    return build(t, CATEGORIES.COBRO_PENDIENTE, severity, client, { accion: 'revisar' });
+  }
+
+  // 8. Invoice / billing received (you owe someone)
   if (isInvoice(text)) {
     const severity = client ? 'medium' : 'low';
     return build(t, CATEGORIES.FACTURA, severity, client, { accion: client ? 'revisar' : 'archivar' });
@@ -258,6 +271,29 @@ function isShipping(text, domain) {
   return signals.some(s => text.includes(s));
 }
 
+function isPaymentReceived(text, domain) {
+  // Payment processors that send confirmations
+  const payDomains = ['transbank.cl', 'fintoc.com', 'khipu.com', 'flow.cl', 'mercadopago.com'];
+  if (payDomains.some(d => domain?.includes(d))) return true;
+  const signals = [
+    'transferencia recibida', 'pago recibido', 'cobro exitoso', 'pago confirmado',
+    'transacción exitosa', 'depósito recibido', 'abono recibido', 'tu cobro fue procesado',
+    'se acreditó', 'se abonó', 'recibiste un pago', 'pago aprobado',
+    'compra aprobada', 'venta aprobada',
+  ];
+  return signals.some(s => text.includes(s));
+}
+
+function isCobroPendiente(text) {
+  const signals = [
+    'recordatorio de pago', 'factura vencida', 'deuda pendiente', 'cobro pendiente',
+    'saldo pendiente', 'pago atrasado', 'cuenta vencida', 'aviso de cobranza',
+    'deuda en mora', 'gestión de cobranza', 'plazo vencido',
+    'su factura no ha sido pagada', 'factura sin pagar', 'pago no recibido',
+  ];
+  return signals.some(s => text.includes(s));
+}
+
 function isPaymentError(text) {
   const signals = [
     'error en el pago', 'pago fallido', 'cobro fallido', 'tarjeta declinada',
@@ -299,6 +335,7 @@ function needsActionFromCategory(cat) {
     CATEGORIES.SEGUIMIENTO,
     CATEGORIES.FACTURA,
     CATEGORIES.CUENTA_POR_PAGAR,
+    CATEGORIES.COBRO_PENDIENTE,
   ].includes(cat);
 }
 

@@ -638,3 +638,52 @@ html, body, #root { height: 100%; background: var(--bg); color: var(--text); fon
 
 .msw-empty        { font-size: 12px; color: var(--muted); padding: 8px 0; }
 .msw-empty-threads { font-size: 11px; color: var(--muted); font-style: italic; }
+
+/* ─── MailStatusWidget v2 ────────────────────────────────────────────────────── */
+.msw-header  { display: flex; align-items: center; justify-content: space-between; }
+.msw-title   { font-size: 12px; font-weight: 600; }
+.msw-time    { font-size: 11px; color: var(--muted); }
+.msw-summary { display: flex; align-items: center; gap: 16px; margin: 4px 0; }
+.msw-stats   { display: flex; flex-direction: column; gap: 5px; flex: 1; }
+.msw-stat    { display: flex; align-items: center; gap: 7px; }
+.msw-stat-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.msw-stat-n   { font-size: 20px; font-weight: 800; line-height: 1; min-width: 24px; }
+.msw-stat-lbl { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.msw-overdue  { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 10px; background: rgba(201,27,27,.15); color: var(--iron-red); }
+.msw-clear    { font-size: 12px; color: var(--green); }
+
+.msw-section       { display: flex; flex-direction: column; gap: 4px; }
+.msw-section-title { font-size: 10px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 2px; }
+.msw-more          { font-size: 11px; color: var(--muted); font-style: italic; padding: 2px 0; }
+
+.msw-thread {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,.02); border: 1px solid var(--border);
+  border-left: 3px solid var(--border); border-radius: 6px;
+}
+.msw-thread.msw-urgent { border-left-color: var(--iron-red); }
+
+.msw-thread-top   { display: flex; align-items: center; gap: 8px; }
+.msw-thread-info  { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 0; cursor: pointer; }
+.msw-client       { font-size: 11px; font-weight: 700; color: var(--blue); flex-shrink: 0; }
+.msw-subject      { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.msw-thread-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.msw-pill          { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+.msw-pill-us       { background: rgba(201,27,27,.15); color: var(--iron-red); }
+.msw-pill-client   { background: rgba(212,144,12,.15); color: var(--iron-gold); }
+.msw-pill-jira     { background: rgba(167,139,250,.15); color: var(--purple); }
+.msw-pill-pending  { background: rgba(100,116,139,.1);  color: var(--muted); }
+
+.msw-age       { font-size: 11px; color: var(--muted); }
+.msw-age-red   { color: var(--iron-red); font-weight: 600; }
+
+.msw-open-btn {
+  font-size: 12px; color: var(--muted); text-decoration: none; padding: 2px 5px;
+  border-radius: 4px; border: 1px solid var(--border); background: transparent;
+  transition: all .12s; flex-shrink: 0;
+}
+.msw-open-btn:hover { color: var(--text); border-color: var(--blue); }
+
+.msw-snippet { font-size: 11px; color: var(--muted); font-style: italic; line-height: 1.4; padding: 0 2px; }

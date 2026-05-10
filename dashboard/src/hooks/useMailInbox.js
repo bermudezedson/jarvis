@@ -83,8 +83,13 @@ export function useMailInbox() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ thread_id: threadId }),
     });
+    // Guard against non-JSON responses (e.g. server not restarted)
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      throw new Error(`El servidor devolvió respuesta inesperada (HTTP ${res.status}). Reinicia la API.`);
+    }
     const json = await res.json();
-    // Mark as rejected in local state
+    if (!res.ok) throw new Error(json.error || `Error HTTP ${res.status}`);
     setData(prev => {
       if (!prev) return prev;
       return {

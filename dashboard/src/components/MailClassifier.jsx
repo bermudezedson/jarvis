@@ -8,6 +8,8 @@ const CAT_LABEL = {
   seguimiento:       'Seguimiento',
   factura:           'Factura',
   cuenta_por_pagar:  'Cuenta x Pagar',
+  pago_recibido:     'Pago Recibido',
+  cobro_pendiente:   'Cobro Pendiente',
   estafa:            'Estafa',
   envio:             'Envío',
   suscripcion:       'Suscripción',
@@ -22,6 +24,8 @@ const CAT_COLOR = {
   seguimiento:       'var(--purple)',
   factura:           'var(--iron-gold)',
   cuenta_por_pagar:  'var(--iron-red)',
+  pago_recibido:     'var(--green)',
+  cobro_pendiente:   'var(--iron-red)',
   estafa:            'var(--iron-red)',
   envio:             'var(--green)',
   suscripcion:       'var(--muted)',
@@ -48,7 +52,7 @@ const ESTADO_CONFIG = {
 };
 
 // Categories that support lifecycle tracking (client-facing threads)
-const LIFECYCLE_CATS = new Set(['solicitud_cliente', 'seguimiento', 'factura', 'cuenta_por_pagar']);
+const LIFECYCLE_CATS = new Set(['solicitud_cliente', 'seguimiento', 'factura', 'cuenta_por_pagar', 'cobro_pendiente']);
 
 // ─── Contextual actions per category ─────────────────────────────────────────
 
@@ -72,6 +76,16 @@ const CAT_ACTIONS = {
     approve_label: '💳 Gestionar',
     reject_label:  'Ignorar',
     tip: 'Gestionar: queda en lista de pagos pendientes. Ignorar: cargo ya resuelto.',
+  },
+  pago_recibido: {
+    approve_label: '✓ Registrado',
+    reject_label:  'Ignorar',
+    tip: 'Registrado: confirmas que recibiste el pago. Útil para reconciliación contable.',
+  },
+  cobro_pendiente: {
+    approve_label: '📞 Gestionar cobro',
+    reject_label:  'Ya pagado',
+    tip: 'Gestionar cobro: queda en lista de seguimiento financiero. Ya pagado: si el cliente ya canceló.',
   },
   estafa: {
     approve_label: '🚨 Denunciar phishing',
