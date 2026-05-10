@@ -753,11 +753,17 @@ router.post('/mail/feedback/confirm', (req, res) => {
       }
     }
 
-    db.logAction('system', 'rule_confirmed', {
-      rule_id:    ruleResult.id,
-      pattern:    proposed_rule.pattern_value,
-      reclassified,
-    });
+    // Log against the source thread (fetch thread_id from feedback row)
+    try {
+      const fbRow = db.getDb().prepare('SELECT thread_id FROM feedback WHERE id = ?').get(feedback_id);
+      if (fbRow?.thread_id) {
+        db.logAction(fbRow.thread_id, 'rule_confirmed', {
+          rule_id:    ruleResult.id,
+          pattern:    proposed_rule.pattern_value,
+          reclassified,
+        });
+      }
+    } catch { /* non-fatal */ }
     logger.info('Rule confirmed', { ruleId: ruleResult.id, pattern: proposed_rule.pattern_value, reclassified });
 
     res.json({
