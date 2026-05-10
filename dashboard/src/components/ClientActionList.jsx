@@ -212,7 +212,7 @@ function MessageBubble({ message, onNameSaved }) {
 
 const INITIAL_MESSAGES = 3;
 
-function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus }) {
+function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus, isInformativo = false }) {
   const [expanded,       setExpanded]       = useState(false);
   const [messages,       setMessages]       = useState(null);
   const [loadingMsgs,    setLoadingMsgs]    = useState(false);
@@ -223,6 +223,26 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus }) 
   const [resolveNote,    setResolveNote]    = useState('');
   const [showResolve,    setShowResolve]    = useState(false);
   const [replyMode,      setReplyMode]      = useState('reply'); // 'reply' | 'reply_all'
+  const [summary,        setSummary]        = useState(t.ai_summary || null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+
+  // Lazy-generate summary in background on mount
+  useEffect(() => {
+    if (summary || summaryLoading) return;
+    let cancelled = false;
+    const delay = Math.floor(Math.random() * 1200);
+    const timer = setTimeout(async () => {
+      if (cancelled) return;
+      setSummaryLoading(true);
+      try {
+        const res  = await fetch(`${API}/mail/thread/${t.thread_id}/summary`, { method: 'POST' });
+        const data = await res.json();
+        if (!cancelled && data.summary) setSummary(data.summary);
+      } catch { /* silent */ }
+      finally { if (!cancelled) setSummaryLoading(false); }
+    }, delay);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [t.thread_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const age    = ageBadge(t.days_since_last ?? 0);
   const sevCls = t.severity === 'high' ? 'ctl-row-high' : t.severity === 'medium' ? 'ctl-row-med' : '';
@@ -288,13 +308,15 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus }) 
   }
 
   return (
-    <div className={`ctl-row ${sevCls} ${expanded ? 'ctl-row-expanded' : ''}`}>
+    <div className={`ctl-row ${isInformativo ? 'ctl-row-informativo' : sevCls} ${expanded ? 'ctl-row-expanded' : ''}`}>
       {/* ── Summary row (click to expand) ── */}
       <div className="ctl-row-summary" onClick={toggle} style={{ cursor: 'pointer' }}>
         <div className="ctl-row-badges">
-          {!t.last_sender_is_me
-            ? <span className="ctl-badge ctl-badge-action">ACCIÓN</span>
-            : <span className="ctl-badge ctl-badge-waiting">ESPERA</span>
+          {isInformativo
+            ? <span className="ctl-badge ctl-badge-info">INFO</span>
+            : !t.last_sender_is_me
+              ? <span className="ctl-badge ctl-badge-action">ACCIÓN</span>
+              : <span className="ctl-badge ctl-badge-waiting">ESPERA</span>
           }
           {t.client?.empresa && <EmpresaBadge empresa={t.client.empresa} />}
         </div>
@@ -308,8 +330,11 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus }) 
             <span className="ctl-sender">{senderDisplay(t)}</span>
             <span className="ctl-sep">·</span>
             <span>{t.message_count} {t.message_count === 1 ? 'msg' : 'msgs'}</span>
-            {t.jira_suggested && <><span className="ctl-sep">·</span><span className="ctl-jira-hint">→ Jira</span></>}
+            {!isInformativo && t.jira_suggested && <><span className="ctl-sep">·</span><span className="ctl-jira-hint">→ Jira</span></>}
           </div>
+          {/* AI summary line */}
+          {summary && <div className="thread-summary">{summary}</div>}
+          {summaryLoading && <div className="thread-summary loading">Generando resumen...</div>}
         </div>
 
         <div className="ctl-row-right">
@@ -348,81 +373,70 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus }) 
             <div className="thread-snippet-fallback">"{t.snippet}"</div>
           )}
 
-          {/* Reply area */}
-          <div className="reply-area">
-            {/* Reply mode toggle */}
-            {showReplyAll && (
-              <div className="reply-mode-toggle">
-                <button className={`reply-mode-btn ${replyMode === 'reply' ? 'active' : ''}`}
-                  onClick={() => setReplyMode('reply')}>
-                  Responder
-                </button>
-                <button className={`reply-mode-btn ${replyMode === 'reply_all' ? 'active' : ''}`}
-                  onClick={() => setReplyMode('reply_all')}>
-                  Responder a todos ({replyAllContacts.length})
-                </button>
+          {/* Reply area — hidden for informativos */}
+          {!isInformativo && (
+            <div className="reply-area">
+              {showReplyAll && (
+                <div className="reply-mode-toggle">
+                  <button className={`reply-mode-btn ${replyMode === 'reply' ? 'active' : ''}`}
+                    onClick={() => setReplyMode('reply')}>
+                    Responder
+                  </button>
+                  <button className={`reply-mode-btn ${replyMode === 'reply_all' ? 'active' : ''}`}
+                    onClick={() => setReplyMode('reply_all')}>
+                    Responder a todos ({replyAllContacts.length})
+                  </button>
+                </div>
+              )}
+              <div className="reply-to-info">
+                <span className="reply-to-label">Para: </span>
+                <strong className="reply-to-email">{replyTo.to}</strong>
+                {replyTo.name && replyTo.name !== replyTo.to && (
+                  <span className="reply-to-name"> ({replyTo.name})</span>
+                )}
+                {replyMode === 'reply_all' && ccRecipients && (
+                  <span className="reply-cc-list"><br/>CC: {ccRecipients}</span>
+                )}
+                <span className="reply-to-subject"> · {replyTo.subject}</span>
               </div>
-            )}
-            <div className="reply-to-info">
-              <span className="reply-to-label">Para: </span>
-              <strong className="reply-to-email">{replyTo.to}</strong>
-              {replyTo.name && replyTo.name !== replyTo.to && (
-                <span className="reply-to-name"> ({replyTo.name})</span>
-              )}
-              {replyMode === 'reply_all' && ccRecipients && (
-                <span className="reply-cc-list"><br/>CC: {ccRecipients}</span>
-              )}
-              <span className="reply-to-subject"> · {replyTo.subject}</span>
+              <textarea
+                className="reply-input"
+                placeholder="Escribe tu respuesta..."
+                value={replyText}
+                onChange={e => setReplyText(e.target.value)}
+                rows={4}
+              />
+              <div className="reply-actions">
+                <button className="ctl-btn ctl-btn-suggest" onClick={suggestReply} disabled={suggestLoading}>
+                  {suggestLoading ? '✦ Generando...' : '✦ Jarvis'}
+                </button>
+                <button className="ctl-btn ctl-btn-send" onClick={sendReply} disabled={sendLoading || !replyText.trim()}>
+                  {sendLoading ? 'Enviando...' : 'Enviar'}
+                </button>
+                <a href={GMAIL(t.thread_id)} target="_blank" rel="noreferrer" className="ctl-btn ctl-btn-reply">
+                  Gmail ↗
+                </a>
+              </div>
             </div>
-            <textarea
-              className="reply-input"
-              placeholder="Escribe tu respuesta..."
-              value={replyText}
-              onChange={e => setReplyText(e.target.value)}
-              rows={4}
-            />
-            <div className="reply-actions">
-              <button
-                className="ctl-btn ctl-btn-suggest"
-                onClick={suggestReply}
-                disabled={suggestLoading}
-              >
-                {suggestLoading ? '✦ Generando...' : '✦ Jarvis'}
-              </button>
-              <button
-                className="ctl-btn ctl-btn-send"
-                onClick={sendReply}
-                disabled={sendLoading || !replyText.trim()}
-              >
-                {sendLoading ? 'Enviando...' : 'Enviar'}
-              </button>
-              <a
-                href={GMAIL(t.thread_id)}
-                target="_blank"
-                rel="noreferrer"
-                className="ctl-btn ctl-btn-reply"
-              >
-                Gmail ↗
-              </a>
-            </div>
-          </div>
+          )}
 
           {/* Action bar */}
           <div className="action-bar">
-            {/* Jira */}
-            {jiraStatus === 'done'
-              ? <span className="ctl-btn ctl-btn-jira ctl-jira-done">✓ Jira</span>
-              : <button
-                  className={`ctl-btn ctl-btn-jira ${jiraStatus === 'loading' ? 'ctl-loading' : ''}`}
-                  onClick={e => { e.stopPropagation(); onJira(t.thread_id); }}
-                  disabled={jiraStatus === 'loading'}
-                >
-                  {jiraStatus === 'loading' ? '...' : 'Crear Jira'}
-                </button>
-            }
+            {/* Jira — solo para threads no informativos */}
+            {!isInformativo && (
+              jiraStatus === 'done'
+                ? <span className="ctl-btn ctl-btn-jira ctl-jira-done">✓ Jira</span>
+                : <button
+                    className={`ctl-btn ctl-btn-jira ${jiraStatus === 'loading' ? 'ctl-loading' : ''}`}
+                    onClick={e => { e.stopPropagation(); onJira(t.thread_id); }}
+                    disabled={jiraStatus === 'loading'}
+                  >
+                    {jiraStatus === 'loading' ? '...' : 'Crear Jira'}
+                  </button>
+            )}
 
-            {/* Solucionado */}
-            {showResolve ? (
+            {/* Solucionado — solo para no informativos */}
+            {!isInformativo && (showResolve ? (
               <div className="resolve-form" onClick={e => e.stopPropagation()}>
                 <input
                   className="resolve-input"
@@ -430,75 +444,41 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus }) 
                   value={resolveNote}
                   onChange={e => setResolveNote(e.target.value)}
                 />
-                <button
-                  className="ctl-btn ctl-btn-resolve-confirm"
-                  onClick={() => { onResolve(t.thread_id, resolveNote); setShowResolve(false); }}
-                >
+                <button className="ctl-btn ctl-btn-resolve-confirm"
+                  onClick={() => { onResolve(t.thread_id, resolveNote); setShowResolve(false); }}>
                   ✓ Confirmar
                 </button>
                 <button className="ctl-btn ctl-btn-cancel" onClick={() => setShowResolve(false)}>×</button>
               </div>
             ) : (
-              <button
-                className="ctl-btn ctl-btn-resolve"
-                onClick={e => { e.stopPropagation(); setShowResolve(true); }}
-              >
+              <button className="ctl-btn ctl-btn-resolve"
+                onClick={e => { e.stopPropagation(); setShowResolve(true); }}>
                 Solucionado
               </button>
+            ))}
+
+            {/* Gmail — siempre visible */}
+            {isInformativo && (
+              <a href={GMAIL(t.thread_id)} target="_blank" rel="noreferrer" className="ctl-btn ctl-btn-reply">
+                Gmail ↗
+              </a>
             )}
 
             {/* Archivar */}
-            <button
-              className="ctl-btn ctl-btn-archive"
-              onClick={e => { e.stopPropagation(); onArchive(t.thread_id); }}
-            >
+            <button className="ctl-btn ctl-btn-archive"
+              onClick={e => { e.stopPropagation(); onArchive(t.thread_id); }}>
               Archivar
             </button>
 
             {/* Corregir / Feedback */}
-            <button
-              className="ctl-btn ctl-btn-feedback"
+            <button className="ctl-btn ctl-btn-feedback"
               onClick={e => { e.stopPropagation(); onFeedback(t); }}
-              title="Corregir clasificación — enseñar a Jarvis"
-            >
+              title="Corregir clasificación — enseñar a Jarvis">
               ✎ Corregir
             </button>
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// ─── Informativo row (muted, no reply button) ─────────────────────────────────
-
-function InformativoRow({ t, onArchive, onFeedback }) {
-  const age = ageBadge(t.days_since_last ?? 0);
-  return (
-    <div className="ctl-row ctl-row-informativo">
-      <div className="ctl-row-badges">
-        <span className="ctl-badge ctl-badge-info">INFO</span>
-        {t.client?.empresa && <EmpresaBadge empresa={t.client.empresa} />}
-      </div>
-      <div className="ctl-row-main">
-        <div className="ctl-row-header">
-          <span className="ctl-client">{t.client?.name}</span>
-          <span className="ctl-subject">{t.subject}</span>
-        </div>
-        <div className="ctl-row-meta">
-          <span className="ctl-sender">{senderDisplay(t)}</span>
-          <span className="ctl-sep">·</span>
-          <span>{t.message_count} {t.message_count === 1 ? 'msg' : 'msgs'}</span>
-        </div>
-      </div>
-      <div className="ctl-row-right">
-        <span className={`ctl-age ${age.cls}`}>{age.label}</span>
-        <div className="ctl-actions">
-          <a href={GMAIL(t.thread_id)} target="_blank" rel="noreferrer" className="ctl-btn ctl-btn-reply">Gmail</a>
-          <button className="ctl-btn ctl-btn-archive" onClick={() => onArchive(t.thread_id)}>Archivar</button>
-          <button className="ctl-btn ctl-btn-feedback" onClick={() => onFeedback(t)} title="Corregir clasificación">✎</button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -665,8 +645,10 @@ export default function ClientActionList({ clientThreads }) {
   const [jiraStatus,    setJiraStatus]    = useState({});
   const [closedItems,   setClosedItems]   = useState(null);  // lazy loaded
   const [closedLoading, setClosedLoading] = useState(false);
-  const [feedbackThread,setFeedbackThread]= useState(null);  // thread to give feedback on
-  const [showInvestigate, setShowInvestigate] = useState(false);
+  const [feedbackThread,    setFeedbackThread]    = useState(null);
+  const [showInvestigate,   setShowInvestigate]   = useState(false);
+  const [summaryBatchMsg,   setSummaryBatchMsg]   = useState(null);
+  const [summaryBatchLoading, setSummaryBatchLoading] = useState(false);
 
   useEffect(() => {
     if (clientThreads?.items) setLocalItems(clientThreads.items);
@@ -805,14 +787,38 @@ export default function ClientActionList({ clientThreads }) {
           <span className="ctl-summary-badge ctl-summary-blue">{clientThreads.requiring_my_action} requieren acción</span>
           <span className="ctl-summary-badge ctl-summary-gold">{clientThreads.waiting_client_response} esperando cliente</span>
         </div>
-        <button
-          className="ctl-btn ctl-btn-investigate"
-          onClick={() => setShowInvestigate(v => !v)}
-          title="Buscar por qué un correo no aparece en el dashboard"
-        >
-          Investigar
-        </button>
+        <div className="ctl-header-actions">
+          <button
+            className="ctl-btn ctl-btn-investigate"
+            onClick={() => setShowInvestigate(v => !v)}
+            title="Buscar por qué un correo no aparece en el dashboard"
+          >
+            Investigar
+          </button>
+          <button
+            className="ctl-btn ctl-btn-summaries"
+            disabled={summaryBatchLoading}
+            title="Generar resúmenes IA para correos sin resumen"
+            onClick={async () => {
+              setSummaryBatchLoading(true);
+              setSummaryBatchMsg(null);
+              try {
+                const res  = await fetch(`${API}/mail/generate-summaries`, {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ limit: 10 }),
+                });
+                const data = await res.json();
+                setSummaryBatchMsg(data.message || `${data.generated} resúmenes generados`);
+                setTimeout(() => setSummaryBatchMsg(null), 5000);
+              } catch { setSummaryBatchMsg('Error al generar resúmenes'); }
+              finally { setSummaryBatchLoading(false); }
+            }}
+          >
+            {summaryBatchLoading ? '✦ Generando...' : '✦ Resúmenes'}
+          </button>
+        </div>
       </div>
+      {summaryBatchMsg && <div className="ctl-batch-msg">{summaryBatchMsg}</div>}
 
       {/* ── Filter tabs ── */}
       <div className="ctl-filters">
@@ -857,11 +863,15 @@ export default function ClientActionList({ clientThreads }) {
             ))
           : visibleType === 'informativo'
             ? visibleItems.map(t => (
-                <InformativoRow
+                <ThreadRow
                   key={t.thread_id}
                   t={t}
                   onArchive={handleArchive}
+                  onResolve={handleResolve}
+                  onJira={handleJira}
                   onFeedback={handleFeedback}
+                  jiraStatus={jiraStatus[t.thread_id]}
+                  isInformativo={true}
                 />
               ))
             : visibleItems.map(t => <ClosedRow key={t.thread_id} t={t} tipo={visibleType} />)

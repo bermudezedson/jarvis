@@ -920,6 +920,64 @@ router.post('/mail/investigate/add', async (req, res) => {
   }
 });
 
+// ─── AI Summary ──────────────────────────────────────────────────────────────
+
+router.post('/mail/thread/:threadId/summary', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const { generateSummaryForThread } = require('../skills/mail-ops');
+    const summary = await generateSummaryForThread(threadId);
+    if (!summary) return res.status(404).json({ error: 'Could not generate summary' });
+
+    const db = require('../db/database');
+    const cached = db.getThreadSummary(threadId);
+    res.json({ source: cached === summary ? 'cache' : 'generated', summary });
+  } catch (err) {
+    logger.error('Summary endpoint failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/mail/generate-summaries', async (req, res) => {
+  try {
+    const { limit = 10 } = req.body;
+    const db = require('../db/database');
+    const { generateSummaryForThread } = require('../skills/mail-ops');
+
+    const pending = db.getDb().prepare(`
+      SELECT thread_id, subject, client_name FROM threads
+      WHERE ai_summary IS NULL AND estado NOT IN ('archivado')
+      ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, date DESC
+      LIMIT ?
+    `).all(limit);
+
+    let generated = 0;
+    let failed    = 0;
+    for (const t of pending) {
+      try {
+        const s = await generateSummaryForThread(t.thread_id);
+        if (s) generated++;
+        else    failed++;
+      } catch {
+        failed++;
+      }
+      // Throttle: 300ms between calls
+      await new Promise(r => setTimeout(r, 300));
+    }
+
+    res.json({
+      success:       true,
+      total_pending: pending.length,
+      generated,
+      failed,
+      message:       `${generated} resúmenes generados, ${failed} fallidos.`,
+    });
+  } catch (err) {
+    logger.error('Batch summaries failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Contactos ───────────────────────────────────────────────────────────────
 
 router.get('/contacts', (req, res) => {

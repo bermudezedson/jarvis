@@ -159,6 +159,8 @@ function initTables() {
     `ALTER TABLE messages ADD COLUMN cc_recipients TEXT DEFAULT ''`,
     `ALTER TABLE messages ADD COLUMN reply_to TEXT DEFAULT ''`,
     `ALTER TABLE messages ADD COLUMN is_from_team INTEGER DEFAULT 0`,
+    `ALTER TABLE threads ADD COLUMN ai_summary TEXT DEFAULT NULL`,
+    `ALTER TABLE threads ADD COLUMN summary_generated_at TEXT DEFAULT NULL`,
   ];
   for (const sql of alterStatements) {
     try { db.exec(sql); } catch { /* column already exists */ }
@@ -210,6 +212,8 @@ function threadToApiFormat(r) {
     resolution_time_hours: t.resolution_time_hours,
     resolution_note:   t.resolution_note,
     gmail_link:        t.gmail_link,
+    ai_summary:        t.ai_summary        || null,
+    summary_generated_at: t.summary_generated_at || null,
   };
 }
 
@@ -526,6 +530,21 @@ function getFeedbackHistory(limit = 20) {
   return db.prepare('SELECT * FROM feedback ORDER BY created_at DESC LIMIT ?').all(limit);
 }
 
+// ─── AI Summaries ──────────────────────────────────────────────────────────
+
+function updateThreadSummary(threadId, summary) {
+  const db = getDb();
+  db.prepare(`
+    UPDATE threads SET ai_summary = ?, summary_generated_at = datetime('now'), updated_at = datetime('now')
+    WHERE thread_id = ?
+  `).run(summary, threadId);
+}
+
+function getThreadSummary(threadId) {
+  const db = getDb();
+  return db.prepare('SELECT ai_summary FROM threads WHERE thread_id = ?').get(threadId)?.ai_summary || null;
+}
+
 // ─── Contactos ─────────────────────────────────────────────────────────────
 
 function upsertContact(email, data = {}) {
@@ -627,4 +646,5 @@ module.exports = {
   threadToApiFormat,
   saveFeedback, saveLearnedRule, findLearnedRule, getAllLearnedRules, getFeedbackHistory,
   upsertContact, getContact, getContactsByClient, getAllContacts, seedContactsFromConfig,
+  updateThreadSummary, getThreadSummary,
 };

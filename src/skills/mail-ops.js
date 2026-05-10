@@ -708,4 +708,73 @@ async function applyLabels(classifications) {
   return { mode: 'applied', applied, failed: results.length - applied };
 }
 
-module.exports = { classify, classifyClientThreads, applyLabels, classifyThread, CATEGORIES };
+// ─── AI Summary ───────────────────────────────────────────────────────────────
+
+async function generateSummaryForThread(threadId) {
+  const db = require('../db/database');
+
+  // Return cached summary if already generated
+  const existing = db.getThreadSummary(threadId);
+  if (existing) return existing;
+
+  // Load messages from SQLite; fetch from Gmail if not cached yet
+  let messages = db.getThreadMessages(threadId);
+  if (messages.length === 0) {
+    const gmail = require('../mcp/gmail');
+    const fullThread = await gmail.getFullThread(threadId);
+    if (!fullThread) return null;
+
+    const teamDomains = (rules.team?.domains || []).map(d => d.toLowerCase());
+    const ceoEmails   = (rules.team?.ceo_emails || []).map(e => e.toLowerCase());
+    fullThread.messages.forEach(msg => {
+      const senderEmail  = (msg.from_email || '').toLowerCase();
+      const senderDomain = senderEmail.split('@')[1] || '';
+      db.saveMessage({
+        message_id:    msg.id,   thread_id:    threadId,
+        sender:        msg.from, sender_email: senderEmail,
+        date:          msg.date, body_text:    msg.body_text,
+        body_html:     msg.body_html || '',
+        is_from_me:    ceoEmails.includes(senderEmail),
+        is_from_team:  teamDomains.some(d => senderDomain === d),
+        to_recipients: msg.to      || '',
+        cc_recipients: msg.cc      || '',
+        reply_to:      msg.reply_to || '',
+      });
+    });
+    messages = db.getThreadMessages(threadId);
+  }
+
+  if (!messages.length) return null;
+
+  const thread = db.getDb().prepare('SELECT * FROM threads WHERE thread_id = ?').get(threadId);
+
+  const conversationText = messages.map(m => {
+    const who  = m.is_from_me ? 'CEO (Alejandro)' : (m.is_from_team ? `Equipo (${m.sender_email})` : `Cliente (${m.sender_email})`);
+    const date = m.date ? new Date(m.date).toLocaleDateString('es-CL', { day: 'numeric', month: 'short' }) : '';
+    return `${who} [${date}]: ${(m.body_text || '(sin texto)').substring(0, 500)}`;
+  }).join('\n---\n');
+
+  const { default: Anthropic } = await import('@anthropic-ai/sdk');
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+  const response = await client.messages.create({
+    model:      'claude-haiku-4-5-20251001',
+    max_tokens: 100,
+    messages:   [{
+      role:    'user',
+      content: `Resume este hilo de correo en UNA sola línea de máximo 120 caracteres. Incluye: nombre de quien escribió (no el email), qué solicita, y si hay respuesta del equipo menciona brevemente qué se respondió. Responde SOLO la línea, sin comillas, sin prefijos. En español.
+
+Cliente: ${thread?.client_name || ''}
+Asunto: ${thread?.subject || ''}
+
+${conversationText}`,
+    }],
+  });
+
+  const summary = response.content[0].text.trim().replace(/^"|"$/g, '');
+  db.updateThreadSummary(threadId, summary);
+  logger.info('Summary generated', { SKILL, threadId, chars: summary.length });
+  return summary;
+}
+
+module.exports = { classify, classifyClientThreads, applyLabels, classifyThread, CATEGORIES, generateSummaryForThread };
