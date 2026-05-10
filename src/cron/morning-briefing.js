@@ -9,6 +9,15 @@ async function run() {
   } catch (err) {
     logger.error('Morning briefing failed', { skill: 'cron:morning', error: err.message });
   }
+
+  // Incremental client scan — only fetches threads since last scan
+  try {
+    const mailOps = require('../skills/mail-ops');
+    await mailOps.classifyClientThreads({ mode: 'incremental' });
+    logger.info('Cron: incremental client scan done', { skill: 'cron:morning' });
+  } catch (err) {
+    logger.error('Cron: client scan failed', { skill: 'cron:morning', error: err.message });
+  }
 }
 
 module.exports = { run };

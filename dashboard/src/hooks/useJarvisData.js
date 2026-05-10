@@ -1,27 +1,24 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
 const REFRESH_MS = 5 * 60 * 1000;
+const API = 'http://localhost:3000/api';
 
 export function useJarvisData() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [dashboardData, setDashboardData] = useState(null);
+  const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState(null);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [viewMode, setViewMode] = useState('current');
   const intervalRef = useRef(null);
 
-  const fetchData = useCallback(async (mode) => {
-    const endpoint = {
-      current: '/api/briefing/current',
-      morning: '/api/briefing/morning',
-      evening: '/api/briefing/evening',
-    }[mode || viewMode] || '/api/briefing/current';
-
+  const fetchDashboard = useCallback(async (mode) => {
+    const type = mode || viewMode;
     try {
       setLoading(true);
-      const res = await fetch(endpoint);
+      const res = await fetch(`${API}/dashboard?type=${type}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData(await res.json());
+      const json = await res.json();
+      setDashboardData(json);
       setLastRefresh(new Date());
       setError(null);
     } catch (err) {
@@ -32,19 +29,44 @@ export function useJarvisData() {
   }, [viewMode]);
 
   useEffect(() => {
-    fetchData(viewMode);
-    intervalRef.current = setInterval(() => fetchData(viewMode), REFRESH_MS);
+    fetchDashboard(viewMode);
+
+    intervalRef.current = setInterval(async () => {
+      // Recalculate severities with zero Gmail cost
+      try {
+        await fetch(`${API}/mail/client-scan`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'refresh_states' }),
+        });
+      } catch {}
+      await fetchDashboard(viewMode);
+    }, REFRESH_MS);
+
     return () => clearInterval(intervalRef.current);
-  }, [viewMode, fetchData]);
+  }, [viewMode, fetchDashboard]);
 
   const refresh = useCallback(async () => {
     try {
-      await fetch('/api/briefing/refresh', { method: 'POST' });
-    } catch {
-      // refresh endpoint best-effort
-    }
-    await fetchData(viewMode);
-  }, [fetchData, viewMode]);
+      await fetch(`${API}/briefing/refresh`, { method: 'POST' });
+    } catch {}
+    await fetchDashboard(viewMode);
+  }, [fetchDashboard, viewMode]);
 
-  return { data, loading, error, lastRefresh, viewMode, setViewMode, refresh };
+  return {
+    // Individual data slices for components
+    briefing:      dashboardData?.briefing      ?? null,
+    clientThreads: dashboardData?.client_threads ?? null,
+    commitments:   dashboardData?.commitments   ?? null,
+    clientPulse:   dashboardData?.client_pulse  ?? null,
+    // Legacy: expose `data` as briefing for any remaining component that uses it
+    data:          dashboardData?.briefing      ?? null,
+    loading,
+    error,
+    lastRefresh,
+    viewMode,
+    setViewMode,
+    refresh,
+    hasRealData: dashboardData?.has_real_data ?? false,
+  };
 }

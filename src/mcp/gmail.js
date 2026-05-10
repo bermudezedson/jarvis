@@ -88,20 +88,43 @@ function decodeBody(part) {
 }
 
 function normalizeThread(t) {
-  const msg = t.messages?.[t.messages.length - 1];
-  const hdrs = msg?.payload?.headers || [];
+  const messages = t.messages || [];
+  const lastMsg  = messages[messages.length - 1];
+  const firstMsg = messages[0];
+  const lastHdrs  = lastMsg?.payload?.headers  || [];
+  const firstHdrs = firstMsg?.payload?.headers || [];
+
+  // Collect every email address that appears anywhere in the thread
+  const allParticipants = new Set();
+  messages.forEach(m => {
+    ['from', 'to', 'cc'].forEach(field => {
+      const val = header(m?.payload?.headers || [], field);
+      if (val) {
+        const emails = val.match(/[a-zA-Z0-9._%+-]+@[\w.-]+/g);
+        if (emails) emails.forEach(e => allParticipants.add(e.toLowerCase()));
+      }
+    });
+  });
+
+  const lastFrom      = header(lastHdrs, 'from');
+  const lastFromEmail = (lastFrom.match(/[a-zA-Z0-9._%+-]+@[\w.-]+/) || [''])[0].toLowerCase();
+
   return {
-    id: t.id,
-    subject: header(hdrs, 'subject') || '(sin asunto)',
-    from: header(hdrs, 'from'),
-    to: header(hdrs, 'to'),
-    snippet: t.snippet || msg?.snippet || '',
-    body: decodeBody(msg?.payload),
-    date: header(hdrs, 'date'),
-    unread: (msg?.labelIds || []).includes('UNREAD'),
-    sent: (msg?.labelIds || []).includes('SENT'),
-    labels: msg?.labelIds || [],
-    message_count: t.messages?.length || 1,
+    id:              t.id,
+    subject:         header(firstHdrs, 'subject') || header(lastHdrs, 'subject') || '(sin asunto)',
+    from:            header(firstHdrs, 'from'),   // original sender
+    last_from:       lastFrom,                    // who sent the last message
+    last_from_email: lastFromEmail,
+    to:              header(lastHdrs, 'to'),
+    snippet:         t.snippet || lastMsg?.snippet || '',
+    body:            decodeBody(lastMsg?.payload),
+    date:            header(lastHdrs,  'date'),   // date of last message
+    original_date:   header(firstHdrs, 'date'),   // date thread started
+    unread:          (lastMsg?.labelIds || []).includes('UNREAD'),
+    sent:            (lastMsg?.labelIds || []).includes('SENT'),
+    labels:          lastMsg?.labelIds || [],
+    message_count:   messages.length,
+    participants:    Array.from(allParticipants),
   };
 }
 
@@ -121,6 +144,46 @@ async function fetchThreads(query, maxResults = 50) {
 async function getUnreadThreads(hours = 12) {
   logger.info('Fetching unread threads', { skill: SKILL, hours });
   return fetchThreads(`is:unread newer_than:${hours}h`, 50);
+}
+
+/**
+ * Fetch ALL threads (read + unread) involving known client domains.
+ * Searches both from: AND to: so we catch both inbound and outbound messages.
+ * Used for the client deep-scan — does NOT use is:unread.
+ *
+ * @param {string[]} clientDomains - domains from clients.yml
+ * @param {number}   days          - look-back window (default 30)
+ */
+async function getClientThreads(clientDomains, days = 30) {
+  logger.info('Fetching client threads', { skill: SKILL, domains: clientDomains.length, days });
+
+  const batchSize = 10; // stay under Gmail query-length limit
+  const allThreads = [];
+
+  // Threads where a client wrote to us
+  for (let i = 0; i < clientDomains.length; i += batchSize) {
+    const batch = clientDomains.slice(i, i + batchSize);
+    const q = `(${batch.map(d => `from:${d}`).join(' OR ')}) newer_than:${days}d`;
+    allThreads.push(...await fetchThreads(q, 100));
+  }
+
+  // Threads where we wrote to a client (CEO replied last)
+  for (let i = 0; i < clientDomains.length; i += batchSize) {
+    const batch = clientDomains.slice(i, i + batchSize);
+    const q = `(${batch.map(d => `to:${d}`).join(' OR ')}) newer_than:${days}d`;
+    allThreads.push(...await fetchThreads(q, 100));
+  }
+
+  // Deduplicate by thread id
+  const seen = new Set();
+  const unique = allThreads.filter(t => {
+    if (seen.has(t.id)) return false;
+    seen.add(t.id);
+    return true;
+  });
+
+  logger.info('Client threads fetched', { skill: SKILL, total: unique.length });
+  return unique;
 }
 
 async function getSentEmails(days = 7) {
@@ -201,7 +264,7 @@ async function healthCheck() {
 }
 
 module.exports = {
-  getUnreadThreads, getSentEmails, searchThreads, getThread,
+  getUnreadThreads, getClientThreads, getSentEmails, searchThreads, getThread,
   listLabels, applyLabel, removeLabel, createLabel, createDraft,
   reportPhishing, healthCheck,
 };

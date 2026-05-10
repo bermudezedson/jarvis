@@ -365,6 +365,233 @@ function countByEstado(classified) {
   return counts;
 }
 
+// ─── Client deep-scan ─────────────────────────────────────────────────────────
+
+const processedCache = require('../cache/processed-threads');
+
+function calculateSeverity(lastSenderIsMe, daysSince) {
+  if (lastSenderIsMe) {
+    if (daysSince > 14) return 'high';
+    if (daysSince > 7)  return 'medium';
+    return 'low';
+  } else {
+    if (daysSince > 7) return 'high';
+    if (daysSince > 2) return 'medium';
+    return 'low';
+  }
+}
+
+function calculateEstado(lastSenderIsMe, daysSince) {
+  return lastSenderIsMe ? 'esperando_cliente' : 'esperando_nosotros';
+}
+
+function sortAndBuild(classified, mode, days, stats) {
+  const sevOrder = { high: 0, medium: 1, low: 2 };
+  classified.sort((a, b) =>
+    sevOrder[a.severity] !== sevOrder[b.severity]
+      ? sevOrder[a.severity] - sevOrder[b.severity]
+      : b.days_since_last - a.days_since_last
+  );
+
+  const byEstado = {};
+  const byClient = {};
+  classified.forEach(c => {
+    byEstado[c.estado]      = (byEstado[c.estado]      || 0) + 1;
+    byClient[c.client.name] = (byClient[c.client.name] || 0) + 1;
+  });
+
+  const result = {
+    scan_type:               mode,
+    scanned_at:              new Date().toISOString(),
+    days_window:             days,
+    total_client_threads:    classified.length,
+    requiring_my_action:     classified.filter(c => !c.last_sender_is_me).length,
+    waiting_client_response: classified.filter(c =>  c.last_sender_is_me).length,
+    high_severity:           classified.filter(c => c.severity === 'high').length,
+    scan_stats:              stats,
+    by_estado:               byEstado,
+    by_client:               byClient,
+    items:                   classified,
+  };
+
+  cache.write('client-threads.json', result);
+  return result;
+}
+
+/**
+ * Recalculate severity/estado from the processed-threads cache.
+ * Zero Gmail API calls.
+ */
+function refreshStatesFromCache() {
+  const allCached = processedCache.getAllCached();
+
+  const refreshed = allCached.map(c => {
+    const daysSince = Math.max(0, Math.floor((Date.now() - new Date(c.date).getTime()) / 86400000));
+    // Preserve manually-set states (archived, en_jira)
+    if (c.estado === 'archivado' || c.estado === 'en_jira') {
+      return { ...c, days_since_last: daysSince };
+    }
+    return {
+      ...c,
+      days_since_last:  daysSince,
+      severity:         calculateSeverity(c.last_sender_is_me, daysSince),
+      estado:           calculateEstado(c.last_sender_is_me, daysSince),
+      jira_suggested:   daysSince > 7,
+    };
+  });
+
+  const stats = { total: refreshed.length, new: 0, updated: 0, skipped: refreshed.length };
+  logger.info('Client refresh_states done', { skill: SKILL, total: refreshed.length });
+  return sortAndBuild(refreshed, 'refresh_states', null, stats);
+}
+
+/**
+ * Scan client threads with smart caching.
+ *
+ * @param {Object} options
+ * @param {'initial'|'incremental'|'refresh_states'} options.mode
+ * @param {number}  options.days - only used for mode='initial' (default: 30)
+ */
+async function classifyClientThreads({ mode = 'initial', days = 30 } = {}) {
+  logger.info('Client scan', { skill: SKILL, mode, days });
+
+  // ─── Mode: refresh_states — no Gmail calls ───────────────────────────────────
+  if (mode === 'refresh_states') {
+    return refreshStatesFromCache();
+  }
+
+  const gmail = require('../mcp/gmail');
+
+  // Collect all unique client domains
+  const allDomains = [];
+  clientsConfig.clients.forEach(c => {
+    c.domains.forEach(d => { if (!allDomains.includes(d)) allDomains.push(d); });
+  });
+
+  let threads;
+
+  if (mode === 'incremental') {
+    // ─── Mode: incremental — only fetch since last scan ──────────────────────────
+    const lastScan = processedCache.getLastScan();
+    if (!lastScan) {
+      logger.info('No previous scan found, forcing initial', { skill: SKILL });
+      return classifyClientThreads({ mode: 'initial', days });
+    }
+    const hoursSince = Math.ceil((Date.now() - new Date(lastScan).getTime()) / (1000 * 60 * 60));
+    const scanDays   = Math.max(1, Math.ceil(hoursSince / 24));
+    logger.info('Incremental scan window', { skill: SKILL, lastScan, hoursSince, scanDays });
+    threads = await gmail.getClientThreads(allDomains, scanDays);
+  } else {
+    // ─── Mode: initial — full window scan ────────────────────────────────────────
+    threads = await gmail.getClientThreads(allDomains, days);
+  }
+
+  const filtered = threads.filter(t => !shouldExclude(t));
+
+  // CEO addresses — last message from these = waiting for client
+  const ceoEmails = [
+    (process.env.CEO_EMAIL || 'alejandro@webyseo.cl').toLowerCase(),
+    'alejandro@clickrepuestos.cl',
+    'hablemos@clickrepuestos.cl',
+  ];
+
+  const stats = { total: filtered.length, new: 0, updated: 0, skipped: 0 };
+
+  const classified = filtered.map(t => {
+    const hash   = processedCache.hashThread(t);
+    const action = processedCache.shouldProcess(t.id, hash);
+
+    if (action === 'skip') {
+      stats.skipped++;
+      const cached = processedCache.getCached(t.id);
+      if (cached) {
+        const daysSince = Math.max(0, Math.floor((Date.now() - new Date(cached.date).getTime()) / 86400000));
+        // Preserve manually-set states
+        if (cached.estado === 'archivado' || cached.estado === 'en_jira') {
+          return { ...cached, days_since_last: daysSince };
+        }
+        return {
+          ...cached,
+          days_since_last: daysSince,
+          severity:        calculateSeverity(cached.last_sender_is_me, daysSince),
+          estado:          calculateEstado(cached.last_sender_is_me, daysSince),
+          jira_suggested:  daysSince > 7,
+        };
+      }
+    }
+
+    if (action === 'new')     stats.new++;
+    if (action === 'updated') stats.updated++;
+
+    // ─── Match client ───────────────────────────────────────────────────────────
+    let client = null;
+    for (const email of (t.participants || [])) {
+      const domain = email.split('@')[1];
+      client = matchClient(domain, email);
+      if (client) break;
+    }
+    if (!client) client = matchClient(extractDomain(t.from), extractEmail(t.from));
+    if (!client) return null;
+
+    const lastSenderIsMe = ceoEmails.includes(t.last_from_email);
+    const daysSince = Math.max(0, Math.floor((Date.now() - new Date(t.date).getTime()) / 86400000));
+
+    const classification = {
+      thread_id:         t.id,
+      subject:           t.subject,
+      from:              t.from,
+      last_from:         t.last_from,
+      last_from_email:   t.last_from_email,
+      last_sender_is_me: lastSenderIsMe,
+      date:              t.date,
+      original_date:     t.original_date,
+      snippet:           t.snippet,
+      message_count:     t.message_count,
+      days_since_last:   daysSince,
+      estado:            calculateEstado(lastSenderIsMe, daysSince),
+      severity:          calculateSeverity(lastSenderIsMe, daysSince),
+      category:          lastSenderIsMe ? 'esperando_respuesta' : 'requiere_accion',
+      client: {
+        name:       client.name,
+        domain:     client.domains[0],
+        empresa:    client.empresa,
+        jira_label: client.jira_label,
+      },
+      accion_sugerida: lastSenderIsMe ? 'seguimiento' : 'responder',
+      jira_suggested:  daysSince > 7,
+      aprobado:        null,
+    };
+
+    processedCache.markProcessed(t.id, hash, classification);
+    return classification;
+  }).filter(Boolean);
+
+  // If incremental, merge with all cached threads not covered by this scan window
+  let allThreads = classified;
+  if (mode === 'incremental') {
+    const cached = processedCache.getAllCached();
+    const newIds = new Set(classified.map(c => c.thread_id));
+    const oldCached = cached
+      .filter(c => !newIds.has(c.thread_id))
+      .map(c => {
+        const daysSince = Math.max(0, Math.floor((Date.now() - new Date(c.date).getTime()) / 86400000));
+        return {
+          ...c,
+          days_since_last: daysSince,
+          severity:        calculateSeverity(c.last_sender_is_me, daysSince),
+          estado:          calculateEstado(c.last_sender_is_me, daysSince),
+          jira_suggested:  daysSince > 7,
+        };
+      });
+    allThreads = [...classified, ...oldCached];
+  }
+
+  processedCache.setLastScan();
+
+  logger.info('Client scan done', { skill: SKILL, mode, ...stats, total_merged: allThreads.length });
+  return sortAndBuild(allThreads, mode, days, stats);
+}
+
 // ─── AI enhancement (optional) ───────────────────────────────────────────────
 
 async function enhanceWithAI(items) {
@@ -458,4 +685,4 @@ async function applyLabels(classifications) {
   return { mode: 'applied', applied, failed: results.length - applied };
 }
 
-module.exports = { classify, applyLabels, classifyThread, CATEGORIES };
+module.exports = { classify, classifyClientThreads, applyLabels, classifyThread, CATEGORIES };

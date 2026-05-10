@@ -10,18 +10,64 @@ const logger = require('../utils/logger');
 
 router.get('/briefing/current', (req, res) => {
   const key = isMorningNow() ? 'briefing-am.json' : 'briefing-pm.json';
-  const data = cache.read(key) || cache.read('mock-briefing.json');
+  const data = cache.read(key);
+  if (!data) return res.status(404).json({ error: 'no_briefing', message: 'No hay briefing. Ejecuta POST /briefing/refresh' });
   res.json(data);
 });
 
 router.get('/briefing/morning', (req, res) => {
-  const data = cache.read('briefing-am.json') || cache.read('mock-briefing.json');
+  const data = cache.read('briefing-am.json');
+  if (!data) return res.status(404).json({ error: 'no_briefing', message: 'No hay briefing matutino. Ejecuta POST /briefing/refresh' });
   res.json(data);
 });
 
 router.get('/briefing/evening', (req, res) => {
-  const data = cache.read('briefing-pm.json') || cache.read('mock-briefing.json');
+  const data = cache.read('briefing-pm.json');
+  if (!data) return res.status(404).json({ error: 'no_briefing', message: 'No hay briefing vespertino. Ejecuta POST /briefing/refresh' });
   res.json(data);
+});
+
+// ─── Dashboard consolidado ────────────────────────────────────────────────────
+
+router.get('/dashboard', (req, res) => {
+  const type = req.query.type;
+  let briefing;
+  if (type === 'morning') {
+    briefing = cache.read('briefing-am.json');
+  } else if (type === 'evening') {
+    briefing = cache.read('briefing-pm.json');
+  } else {
+    const key = isMorningNow() ? 'briefing-am.json' : 'briefing-pm.json';
+    briefing = cache.read(key) || cache.read('briefing-am.json') || cache.read('briefing-pm.json');
+  }
+
+  const clientThreads = cache.read('client-threads.json');
+  const mailClassifications = cache.read('mail-classifications.json');
+  const lastRefresh = cache.read('last-refresh.json');
+
+  let commitments = null;
+  try {
+    const commitmentTracker = require('../skills/commitment-tracker');
+    const { open, overdue } = commitmentTracker.getOpen();
+    commitments = { open, overdue, open_count: open.length, overdue_count: overdue.length };
+  } catch {}
+
+  let clientPulse = null;
+  try {
+    const clientPulseSkill = require('../skills/client-pulse');
+    clientPulse = clientPulseSkill.getPulse();
+  } catch {}
+
+  res.json({
+    briefing: briefing || null,
+    client_threads: clientThreads || null,
+    mail: mailClassifications || null,
+    commitments: commitments || null,
+    client_pulse: clientPulse || null,
+    last_refresh: lastRefresh,
+    has_real_data: !!(briefing || clientThreads),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 router.post('/briefing/refresh', async (req, res) => {
@@ -217,6 +263,55 @@ router.post('/mail/reclassify', (req, res) => {
     data.by_category = counts;
     cache.write('mail-classifications.json', data);
     res.json({ success: true, thread_id, category });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Client threads (deep scan — read + unread, 30-day window) ───────────────
+
+router.get('/mail/client-threads', (req, res) => {
+  const data = cache.read('client-threads.json');
+  if (!data) return res.json({ scanned: false, message: 'Ejecuta POST /mail/client-scan primero' });
+  res.json(data);
+});
+
+router.post('/mail/client-scan', async (req, res) => {
+  try {
+    const { days = 30, mode = 'initial' } = req.body;
+    const validModes = ['initial', 'incremental', 'refresh_states'];
+    if (!validModes.includes(mode)) {
+      return res.status(400).json({ error: `mode must be one of: ${validModes.join(', ')}` });
+    }
+    const mailOps = require('../skills/mail-ops');
+    const result = await mailOps.classifyClientThreads({ mode, days });
+    res.json(result);
+  } catch (err) {
+    logger.error('Client scan failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/mail/client-archive', (req, res) => {
+  try {
+    const { thread_id } = req.body;
+    if (!thread_id) return res.status(400).json({ error: 'thread_id required' });
+
+    const processedCache = require('../cache/processed-threads');
+    const data = processedCache.load();
+    if (!data.threads[thread_id]) return res.status(404).json({ error: 'Thread not found in cache' });
+
+    data.threads[thread_id].classification.estado    = 'archivado';
+    data.threads[thread_id].classification.severity  = 'none';
+    data.threads[thread_id].classification.archived_at = new Date().toISOString();
+    processedCache.save(data);
+
+    // Regenerate client-threads.json asynchronously
+    const mailOps = require('../skills/mail-ops');
+    mailOps.classifyClientThreads({ mode: 'refresh_states' }).catch(() => {});
+
+    logger.info('Client thread archived', { thread_id });
+    res.json({ success: true, thread_id, estado: 'archivado' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

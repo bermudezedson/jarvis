@@ -1,51 +1,73 @@
-function severity(value, warnAt, alertAt) {
-  if (value === null || value === undefined) return 'unknown';
-  if (value >= alertAt) return 'red';
-  if (value >= warnAt) return 'yellow';
-  return 'green';
-}
-
-function MetricCard({ label, value, sub, sev }) {
+function MetricCard({ label, value, sub, borderColor, subColor }) {
   return (
-    <div className={`metric-card sev-${sev || 'ok'}`}>
+    <div className="metric-card" style={{ borderLeft: `3px solid ${borderColor}` }}>
       <div className="metric-value">{value ?? '—'}</div>
       <div className="metric-label">{label}</div>
-      {sub && <div className="metric-sub">{sub}</div>}
+      {sub && (
+        <div className="metric-sub" style={subColor ? { color: subColor } : undefined}>
+          {sub}
+        </div>
+      )}
     </div>
   );
 }
 
-export default function StatusBar({ metrics }) {
-  if (!metrics) return <div className="status-bar status-bar--empty">Sin datos de métricas</div>;
+export default function StatusBar({ clientThreads, metrics }) {
+  const nm = metrics?.next_meeting;
 
-  const m = metrics;
-  const nm = m.next_meeting;
+  const clientSub = clientThreads == null
+    ? 'Sin datos — escanear clientes'
+    : clientThreads.high_severity > 0
+      ? `${clientThreads.high_severity} urgentes sin responder`
+      : 'Sin correos urgentes';
+
+  const jiraSub = metrics == null
+    ? 'Sin datos de Jira'
+    : metrics.overdue_tasks > 0
+      ? `${metrics.overdue_tasks} vencidas`
+      : 'Al día';
+
+  const calSub = metrics == null
+    ? 'Sin datos de Calendar'
+    : nm
+      ? `Próxima ${nm.time} — ${nm.title}`
+      : 'Sin reuniones pendientes';
+
+  const commitSub = metrics?.overdue_commitments > 0
+    ? `${metrics.overdue_commitments} vencidos`
+    : metrics?.open_commitments != null
+      ? 'Al día'
+      : 'Sin datos';
 
   return (
     <div className="status-bar">
       <MetricCard
-        label="Correos sin leer"
-        value={m.unread_emails}
-        sub={m.emails_need_decision != null ? `${m.emails_need_decision} requieren decisión` : null}
-        sev={severity(m.emails_need_decision, 2, 5)}
+        label="Correos de clientes"
+        value={clientThreads?.requiring_my_action ?? '—'}
+        sub={clientSub}
+        borderColor="#ef4444"
+        subColor={clientThreads?.high_severity > 0 ? '#ef4444' : undefined}
       />
       <MetricCard
         label="Tareas Jira hoy"
-        value={m.jira_tasks_today}
-        sub={m.overdue_tasks != null ? `${m.overdue_tasks} vencidas` : null}
-        sev={severity(m.overdue_tasks, 1, 3)}
+        value={metrics?.jira_tasks_today ?? '—'}
+        sub={jiraSub}
+        borderColor="#f59e0b"
+        subColor={metrics?.overdue_tasks > 0 ? '#f59e0b' : undefined}
       />
       <MetricCard
         label="Reuniones"
-        value={m.meetings_today}
-        sub={nm ? `Próxima ${nm.time} — ${nm.title}` : 'Sin reuniones pendientes'}
-        sev="ok"
+        value={metrics?.meetings_today ?? '—'}
+        sub={calSub}
+        borderColor="#22c55e"
+        subColor="#22c55e"
       />
       <MetricCard
         label="Compromisos abiertos"
-        value={m.open_commitments ?? '—'}
-        sub={m.overdue_commitments != null ? `${m.overdue_commitments} vencidos` : 'Disponible en Fase 2'}
-        sev={severity(m.overdue_commitments, 1, 3)}
+        value={metrics?.open_commitments ?? '—'}
+        sub={commitSub}
+        borderColor="#3b82f6"
+        subColor={metrics?.overdue_commitments > 0 ? '#f59e0b' : undefined}
       />
     </div>
   );

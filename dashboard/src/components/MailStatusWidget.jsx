@@ -47,7 +47,7 @@ function ThreadRow({ t }) {
     <div className={`msw-thread ${urgent ? 'msw-urgent' : ''}`}>
       <div className="msw-thread-top">
         <div className="msw-thread-info" onClick={() => setOpen(v => !v)}>
-          <span className="msw-client">{t.client}</span>
+          <span className="msw-client">{t.client?.name ?? t.client}</span>
           <span className="msw-subject">{t.subject}</span>
         </div>
         <div className="msw-thread-right">

@@ -92,6 +92,11 @@ clients:
     open_tickets: 0.2
     response_time: 0.2
 
+client_scan:
+  incremental_cron: "0 */4 * * *"      # Cada 4 horas (llama a Gmail)
+  refresh_states_cron: "*/30 * * * *"  # Cada 30 min (recalcula sin costo)
+  initial_days: 30                      # Ventana del escaneo inicial
+
 commitments:
   trigger_phrases:
     - "te lo envío"

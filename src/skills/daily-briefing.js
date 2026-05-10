@@ -91,16 +91,25 @@ function buildBriefing(type, emails, events, tasks, sources) {
   const riskRadar = appendClientPulseRisks(buildRiskRadar(emails, tasks, events));
   const deepWorkSlots = events ? findDeepWorkSlots(events) : [];
   const nextMeeting = events ? getNextMeeting(events) : null;
+  const commitments = getCommitmentsMetric();
+
+  // Read client-threads data for CEO metrics
+  const clientData = cache.read('client-threads.json');
 
   const metrics = {
-    unread_emails: emails ? emails.length : null,
+    unread_emails:    emails ? emails.length : null,
     emails_need_decision: emails ? emails.filter(e => e.needs_decision).length : null,
     jira_tasks_today: tasks ? tasks.filter(t => t.due_today || t.overdue).length : null,
-    overdue_tasks: tasks ? tasks.filter(t => t.overdue).length : null,
-    meetings_today: events ? events.length : null,
-    next_meeting: nextMeeting,
-    open_commitments: getCommitmentsMetric().open,
-    overdue_commitments: getCommitmentsMetric().overdue,
+    overdue_tasks:    tasks ? tasks.filter(t => t.overdue).length : null,
+    meetings_today:   events ? events.length : null,
+    next_meeting:     nextMeeting,
+    open_commitments:  commitments.open,
+    overdue_commitments: commitments.overdue,
+    // Client thread metrics (from client-threads.json)
+    client_threads_total:            clientData?.total_client_threads    ?? null,
+    client_threads_requiring_action: clientData?.requiring_my_action     ?? null,
+    client_threads_waiting:          clientData?.waiting_client_response ?? null,
+    client_threads_high_severity:    clientData?.high_severity           ?? null,
   };
 
   return {
@@ -112,6 +121,7 @@ function buildBriefing(type, emails, events, tasks, sources) {
     executive_inbox: executiveInbox,
     risk_radar: riskRadar,
     deep_work_slots: deepWorkSlots,
+    calendar_events: events || [],
   };
 }
 
