@@ -155,6 +155,10 @@ function initTables() {
   const alterStatements = [
     `ALTER TABLE threads ADD COLUMN last_sender_is_team INTEGER DEFAULT 0`,
     `ALTER TABLE threads ADD COLUMN is_informativo INTEGER DEFAULT 0`,
+    `ALTER TABLE messages ADD COLUMN to_recipients TEXT DEFAULT ''`,
+    `ALTER TABLE messages ADD COLUMN cc_recipients TEXT DEFAULT ''`,
+    `ALTER TABLE messages ADD COLUMN reply_to TEXT DEFAULT ''`,
+    `ALTER TABLE messages ADD COLUMN is_from_team INTEGER DEFAULT 0`,
   ];
   for (const sql of alterStatements) {
     try { db.exec(sql); } catch { /* column already exists */ }
@@ -382,11 +386,23 @@ function hasThreadMessages(threadId) {
 function saveMessage(msg) {
   const db = getDb();
   db.prepare(`
-    INSERT OR REPLACE INTO messages
-      (message_id, thread_id, sender, sender_email, date, body_text, body_html, is_from_me)
-    VALUES
-      (@message_id, @thread_id, @sender, @sender_email, @date, @body_text, @body_html, @is_from_me)
-  `).run({ ...msg, is_from_me: msg.is_from_me ? 1 : 0 });
+    INSERT OR REPLACE INTO messages (
+      message_id, thread_id, sender, sender_email, date,
+      body_text, body_html, is_from_me, is_from_team,
+      to_recipients, cc_recipients, reply_to
+    ) VALUES (
+      @message_id, @thread_id, @sender, @sender_email, @date,
+      @body_text, @body_html, @is_from_me, @is_from_team,
+      @to_recipients, @cc_recipients, @reply_to
+    )
+  `).run({
+    ...msg,
+    is_from_me:    msg.is_from_me    ? 1 : 0,
+    is_from_team:  msg.is_from_team  ? 1 : 0,
+    to_recipients: msg.to_recipients || '',
+    cc_recipients: msg.cc_recipients || '',
+    reply_to:      msg.reply_to      || '',
+  });
 }
 
 // ─── Log de acciones ───────────────────────────────────────────────────────

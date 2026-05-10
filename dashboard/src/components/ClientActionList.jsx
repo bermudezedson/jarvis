@@ -4,6 +4,70 @@ import FeedbackModal from './FeedbackModal';
 const API   = 'http://localhost:3000/api';
 const GMAIL = id => `https://mail.google.com/mail/u/0/#inbox/${id}`;
 
+// Team domains — must match rules.yml team.domains
+const TEAM_DOMAINS = ['clickrepuestos.cl', 'webyseo.cl'];
+
+function isTeamEmail(email) {
+  if (!email) return false;
+  const domain = email.toLowerCase().split('@')[1] || '';
+  return TEAM_DOMAINS.some(d => domain === d);
+}
+
+// Calculate the correct reply-to (last EXTERNAL participant, not team/CEO)
+function calculateReplyTo(messages, thread) {
+  if (!messages?.length) {
+    return {
+      to:      thread.last_from_email || '',
+      name:    thread.client?.name || '',
+      subject: `Re: ${thread.subject || ''}`,
+    };
+  }
+  const lastExternal = [...messages].reverse().find(m => !m.is_from_me && !m.is_from_team);
+  if (lastExternal) {
+    const email   = lastExternal.reply_to || lastExternal.sender_email || '';
+    const rawName = lastExternal.sender?.replace(/<.*>/, '').replace(/"/g, '').trim() || '';
+    const nameIsEmail = !rawName || rawName.toLowerCase() === email.toLowerCase() || rawName.includes('@');
+    return {
+      to:      email,
+      name:    lastExternal.sender_display_name || (nameIsEmail ? '' : rawName),
+      subject: `Re: ${thread.subject || ''}`,
+    };
+  }
+  return {
+    to:      thread.last_from_email || '',
+    name:    thread.client?.name || '',
+    subject: `Re: ${thread.subject || ''}`,
+  };
+}
+
+// Collect all unique EXTERNAL participants from the thread (for reply-all CC)
+function calculateReplyAll(messages) {
+  if (!messages?.length) return [];
+  const external = new Map(); // email → name
+  messages.forEach(msg => {
+    const allRecipients = [
+      { email: msg.sender_email, name: msg.sender_display_name || msg.sender?.replace(/<.*>/, '').trim() || '' },
+      ...((msg.to_recipients || '').match(/[a-zA-Z0-9._%+-]+@[\w.-]+/g) || []).map(e => ({ email: e, name: e })),
+      ...((msg.cc_recipients || '').match(/[a-zA-Z0-9._%+-]+@[\w.-]+/g) || []).map(e => ({ email: e, name: e })),
+    ];
+    allRecipients.forEach(({ email, name }) => {
+      if (!email) return;
+      const lower = email.toLowerCase();
+      if (!isTeamEmail(lower) && !external.has(lower)) {
+        external.set(lower, name || lower);
+      }
+    });
+  });
+  return Array.from(external.entries()).map(([email, name]) => ({ email, name }));
+}
+
+function formatRecipients(str) {
+  if (!str) return '';
+  const emails = str.match(/[a-zA-Z0-9._%+-]+@[\w.-]+/g) || [];
+  if (emails.length <= 2) return str.replace(/[<>]/g, '').trim();
+  return `${emails.slice(0, 2).join(', ')} y ${emails.length - 2} más`;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function ageBadge(days) {
@@ -50,18 +114,27 @@ function stripQuotedText(text) {
 // ─── Message bubble ───────────────────────────────────────────────────────────
 
 function MessageBubble({ message, onNameSaved }) {
-  const isMe = message.is_from_me;
+  const isMe   = message.is_from_me;
+  const isTeam = message.is_from_team;
+  const isUs   = isMe || isTeam;
+
   const senderEmail = message.sender_email || '';
+  const rawName     = message.sender?.replace(/<.*>/, '').replace(/"/g, '').trim() || '';
+  const nameIsEmail = !rawName
+    || rawName.trim() === ''
+    || rawName.toLowerCase() === senderEmail.toLowerCase()
+    || rawName.includes('@');
 
-  // Prefer enriched display name; fall back to parsing raw sender header
-  const defaultName = message.sender_display_name
-    || message.sender?.replace(/<.*>/, '').replace(/"/g, '').trim()
-    || (isMe ? 'Yo' : senderEmail || 'Cliente');
+  const resolvedName = message.sender_display_name || (nameIsEmail ? '' : rawName) || (isMe ? 'Yo' : senderEmail);
 
-  const [displayName, setDisplayName] = useState(defaultName);
+  const [displayName, setDisplayName] = useState(resolvedName);
   const [editing,     setEditing]     = useState(false);
-  const [editValue,   setEditValue]   = useState(defaultName);
+  const [editValue,   setEditValue]   = useState(resolvedName);
   const [saving,      setSaving]      = useState(false);
+
+  const showEditBtn = !isUs && senderEmail && (!message.sender_display_name && nameIsEmail);
+
+  const ccList = (message.cc_recipients || '').match(/[a-zA-Z0-9._%+-]+@[\w.-]+/g) || [];
 
   const body = stripQuotedText(message.body_text || '');
   const dateStr = message.date
@@ -70,9 +143,6 @@ function MessageBubble({ message, onNameSaved }) {
         hour: '2-digit', minute: '2-digit',
       })
     : '';
-
-  // Only show edit pencil for client messages that have an email and no known name
-  const canEditName = !isMe && senderEmail && !message.sender_display_name;
 
   async function saveName() {
     if (!editValue.trim() || !senderEmail) { setEditing(false); return; }
@@ -90,8 +160,11 @@ function MessageBubble({ message, onNameSaved }) {
     finally { setSaving(false); }
   }
 
+  // Bubble class: from-me (CEO, blue), from-team (muted blue), from-client (green)
+  const bubbleCls = isMe ? 'from-me' : isTeam ? 'from-team' : 'from-client';
+
   return (
-    <div className={`thread-message ${isMe ? 'from-me' : 'from-client'}`}>
+    <div className={`thread-message ${bubbleCls}`}>
       <div className="msg-header">
         {editing ? (
           <span className="edit-name-inline">
@@ -102,22 +175,34 @@ function MessageBubble({ message, onNameSaved }) {
               onKeyDown={e => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditing(false); }}
               autoFocus
             />
-            <button className="edit-name-save"  onClick={saveName}             disabled={saving}>✓</button>
+            <button className="edit-name-save"  onClick={saveName} disabled={saving}>✓</button>
             <button className="edit-name-cancel" onClick={() => setEditing(false)}>✕</button>
           </span>
         ) : (
-          <span className={isMe ? 'sender-me' : 'sender-client'}>
+          <span className={isMe ? 'sender-me' : isTeam ? 'sender-team' : 'sender-client'}>
             {displayName}
-            {canEditName && (
-              <button className="edit-name-btn" title="Editar nombre" onClick={() => { setEditValue(displayName); setEditing(true); }}>
-                ✏
-              </button>
+            {showEditBtn && (
+              <button className="edit-name-btn" title="Asignar nombre"
+                onClick={() => { setEditValue(displayName); setEditing(true); }}>✏</button>
             )}
           </span>
         )}
         {senderEmail && !editing && <span className="sender-email">({senderEmail})</span>}
         <span className="msg-date">{dateStr}</span>
       </div>
+
+      {/* Para / CC recipients */}
+      {(message.to_recipients || ccList.length > 0) && (
+        <div className="msg-recipients">
+          {message.to_recipients && (
+            <span className="msg-to">Para: {formatRecipients(message.to_recipients)}</span>
+          )}
+          {ccList.length > 0 && (
+            <span className="msg-cc">CC: {ccList.join(', ')}</span>
+          )}
+        </div>
+      )}
+
       <div className="msg-body">{body || '(sin contenido)'}</div>
     </div>
   );
@@ -137,6 +222,7 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus }) 
   const [sendLoading,    setSendLoading]    = useState(false);
   const [resolveNote,    setResolveNote]    = useState('');
   const [showResolve,    setShowResolve]    = useState(false);
+  const [replyMode,      setReplyMode]      = useState('reply'); // 'reply' | 'reply_all'
 
   const age    = ageBadge(t.days_since_last ?? 0);
   const sevCls = t.severity === 'high' ? 'ctl-row-high' : t.severity === 'medium' ? 'ctl-row-med' : '';
@@ -173,17 +259,12 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus }) 
     setSuggestLoading(false);
   }
 
-  // Determine reply-to: last message from the client side
-  const lastClientMsg = messages ? [...messages].reverse().find(m => !m.is_from_me) : null;
-  const replyTo = lastClientMsg
-    ? {
-        name:  lastClientMsg.sender?.replace(/<.*>/, '').replace(/"/g, '').trim() || t.client?.name || '',
-        email: lastClientMsg.sender_email || t.last_from_email || '',
-      }
-    : {
-        name:  t.client?.name || '',
-        email: t.last_sender_is_me ? (t.last_from_email || '') : (t.last_from_email || ''),
-      };
+  const replyTo          = calculateReplyTo(messages, t);
+  const replyAllContacts = calculateReplyAll(messages || []);
+  const showReplyAll     = replyAllContacts.length > 1;
+  const ccRecipients     = replyMode === 'reply_all'
+    ? replyAllContacts.filter(r => r.email !== replyTo.to).map(r => r.email).join(', ')
+    : '';
 
   async function sendReply() {
     if (!replyText.trim()) return;
@@ -192,7 +273,13 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus }) 
       await fetch(`${API}/mail/thread/${t.thread_id}/reply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body: replyText, to: replyTo.email, subject: t.subject }),
+        body: JSON.stringify({
+          body:       replyText,
+          to:         replyTo.to,
+          cc:         ccRecipients,
+          subject:    replyTo.subject,
+          reply_mode: replyMode,
+        }),
       });
       setReplyText('');
       setExpanded(false);
@@ -263,13 +350,29 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, jiraStatus }) 
 
           {/* Reply area */}
           <div className="reply-area">
-            <div className="reply-to-header">
-              <span className="reply-to-label">Para:</span>
-              <span className="reply-to-email">{replyTo.email}</span>
-              {replyTo.name && replyTo.name !== replyTo.email && (
-                <span className="reply-to-name">({replyTo.name})</span>
+            {/* Reply mode toggle */}
+            {showReplyAll && (
+              <div className="reply-mode-toggle">
+                <button className={`reply-mode-btn ${replyMode === 'reply' ? 'active' : ''}`}
+                  onClick={() => setReplyMode('reply')}>
+                  Responder
+                </button>
+                <button className={`reply-mode-btn ${replyMode === 'reply_all' ? 'active' : ''}`}
+                  onClick={() => setReplyMode('reply_all')}>
+                  Responder a todos ({replyAllContacts.length})
+                </button>
+              </div>
+            )}
+            <div className="reply-to-info">
+              <span className="reply-to-label">Para: </span>
+              <strong className="reply-to-email">{replyTo.to}</strong>
+              {replyTo.name && replyTo.name !== replyTo.to && (
+                <span className="reply-to-name"> ({replyTo.name})</span>
               )}
-              <span className="reply-to-subject">· Re: {t.subject}</span>
+              {replyMode === 'reply_all' && ccRecipients && (
+                <span className="reply-cc-list"><br/>CC: {ccRecipients}</span>
+              )}
+              <span className="reply-to-subject"> · {replyTo.subject}</span>
             </div>
             <textarea
               className="reply-input"

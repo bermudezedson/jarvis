@@ -361,21 +361,41 @@ router.get('/mail/thread/:threadId/messages', async (req, res) => {
     const { threadId } = req.params;
     const db = require('../db/database');
 
-    // Fetch from Gmail if not cached yet
-    if (!db.hasThreadMessages(threadId)) {
+    const fs = require('fs');
+    const path = require('path');
+    const yaml = require('js-yaml');
+    const rules = yaml.load(fs.readFileSync(path.join(__dirname, '../../config/rules.yml'), 'utf8'));
+    const teamDomains = (rules.team?.domains || []).map(d => d.toLowerCase());
+    const ceoEmails   = (rules.team?.ceo_emails || []).map(e => e.toLowerCase());
+
+    const cached = db.getThreadMessages(threadId);
+    // Stale cache: has messages but missing to_recipients (old format before Fix 1)
+    const isStale = cached.length > 0 && cached.every(m => !m.to_recipients && !m.cc_recipients);
+
+    if (cached.length === 0 || isStale) {
       const gmail = require('../mcp/gmail');
       const thread = await gmail.getFullThread(threadId);
       if (!thread) return res.status(404).json({ error: 'Thread not found in Gmail' });
+
       for (const msg of thread.messages) {
+        const senderEmail  = (msg.from_email || '').toLowerCase();
+        const senderDomain = senderEmail.split('@')[1] || '';
+        const isCeo        = ceoEmails.includes(senderEmail);
+        const isTeam       = teamDomains.some(d => senderDomain === d);
+
         db.saveMessage({
-          message_id:   msg.id,
-          thread_id:    threadId,
-          sender:       msg.from,
-          sender_email: msg.from_email,
-          date:         msg.date,
-          body_text:    msg.body_text,
-          body_html:    msg.body_html,
-          is_from_me:   msg.is_from_me,
+          message_id:    msg.id,
+          thread_id:     threadId,
+          sender:        msg.from,
+          sender_email:  senderEmail,
+          date:          msg.date,
+          body_text:     msg.body_text,
+          body_html:     msg.body_html || '',
+          is_from_me:    isCeo,
+          is_from_team:  isTeam,
+          to_recipients: msg.to   || '',
+          cc_recipients: msg.cc   || '',
+          reply_to:      msg.reply_to || '',
         });
       }
     }
@@ -384,12 +404,15 @@ router.get('/mail/thread/:threadId/messages', async (req, res) => {
     const raw = db.getThreadMessages(threadId);
     const messages = raw.map(msg => {
       const contact = db.getContact(msg.sender_email);
+      // sender_display_name: prefer saved contact name, else parse the raw From header
+      const parsedName = msg.sender?.replace(/<.*>/, '').replace(/"/g, '').trim() || '';
+      const nameIsEmail = !parsedName || parsedName.toLowerCase() === (msg.sender_email || '').toLowerCase() || parsedName.includes('@');
       return {
         ...msg,
-        sender_display_name: contact?.name
-          || msg.sender?.replace(/<.*>/, '').replace(/"/g, '').trim()
-          || msg.sender_email,
-        contact_role: contact?.role || null,
+        is_from_me:   !!msg.is_from_me,
+        is_from_team: !!msg.is_from_team,
+        sender_display_name: contact?.name || (nameIsEmail ? null : parsedName),
+        contact_role:        contact?.role || null,
       };
     });
 
@@ -448,19 +471,35 @@ Responde SOLO con el cuerpo del email, sin asunto ni firma.`,
 router.post('/mail/thread/:threadId/reply', async (req, res) => {
   try {
     const { threadId } = req.params;
-    const { body, to, subject } = req.body;
+    const { body, to, cc, subject, reply_mode } = req.body;
     if (!body) return res.status(400).json({ error: 'body required' });
 
     const gmail = require('../mcp/gmail');
-    await gmail.sendReply(to, subject, body, threadId);
+    const db    = require('../db/database');
 
-    const db = require('../db/database');
-    db.logAction(threadId, 'reply_sent', { to, subject });
+    const thread = db.getDb().prepare('SELECT * FROM threads WHERE thread_id = ?').get(threadId);
+    if (!thread) return res.status(404).json({ error: 'Thread not found' });
+
+    const toEmail  = to || thread.last_from_email || '';
+    const ccEmails = cc || '';
+    const replySubject = subject || `Re: ${thread.subject || ''}`;
+
+    await gmail.sendReply(toEmail, replySubject, body, threadId, ccEmails);
+
+    db.getDb().prepare(`
+      UPDATE threads SET
+        last_sender_is_me = 1, last_sender_is_team = 1,
+        estado = 'esperando_cliente', severity = 'low',
+        updated_at = datetime('now')
+      WHERE thread_id = ?
+    `).run(threadId);
+
+    db.logAction(threadId, reply_mode === 'reply_all' ? 'replied_all' : 'replied', { to: toEmail, cc: ccEmails });
 
     const lastDraftId = db.getLastDraftId(threadId);
     if (lastDraftId) db.markDraftSent(lastDraftId);
 
-    res.json({ success: true, thread_id: threadId });
+    res.json({ success: true, thread_id: threadId, to: toEmail, cc: ccEmails });
   } catch (err) {
     logger.error('Reply send failed', { error: err.message });
     res.status(500).json({ error: err.message });

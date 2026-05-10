@@ -212,25 +212,23 @@ async function getFullThread(threadId) {
   const t = await gmail('GET', `/threads/${threadId}?format=full`);
   if (!t?.messages) return null;
 
-  const ceoEmails = [
-    (process.env.CEO_EMAIL || 'alejandro@webyseo.cl').toLowerCase(),
-    'alejandro@clickrepuestos.cl',
-    'hablemos@clickrepuestos.cl',
-  ];
-
   const messages = t.messages.map(msg => {
-    const hdrs     = msg.payload?.headers || [];
-    const fromFull = header(hdrs, 'from');
-    const fromEmail= (fromFull.match(/[a-zA-Z0-9._%+-]+@[\w.-]+/) || [''])[0].toLowerCase();
+    const hdrs      = msg.payload?.headers || [];
+    const fromFull  = header(hdrs, 'from');
+    const fromEmail = (fromFull.match(/[a-zA-Z0-9._%+-]+@[\w.-]+/) || [''])[0].toLowerCase();
     return {
-      id:         msg.id,
-      from:       fromFull,
+      id:        msg.id,
+      from:      fromFull,
       from_email: fromEmail,
-      date:       header(hdrs, 'date'),
-      subject:    header(hdrs, 'subject'),
-      body_text:  decodeBody(msg.payload, 'text/plain'),
-      body_html:  decodeBody(msg.payload, 'text/html'),
-      is_from_me: ceoEmails.includes(fromEmail),
+      to:        header(hdrs, 'to'),
+      cc:        header(hdrs, 'cc'),
+      bcc:       header(hdrs, 'bcc'),
+      reply_to:  header(hdrs, 'reply-to'),
+      date:      header(hdrs, 'date'),
+      subject:   header(hdrs, 'subject'),
+      body_text: decodeBody(msg.payload, 'text/plain'),
+      body_html: decodeBody(msg.payload, 'text/html'),
+      labels:    msg.labelIds || [],
     };
   });
 
@@ -240,11 +238,12 @@ async function getFullThread(threadId) {
 /**
  * Send a reply to a thread via Gmail API.
  */
-async function sendReply(to, subject, body, threadId) {
-  logger.info('Sending reply', { skill: SKILL, to, threadId });
+async function sendReply(to, subject, body, threadId, cc = '') {
+  logger.info('Sending reply', { skill: SKILL, to, cc, threadId });
   const replySubject = subject?.startsWith('Re:') ? subject : `Re: ${subject || ''}`;
   const raw = [
     `To: ${to}`,
+    ...(cc ? [`Cc: ${cc}`] : []),
     `Subject: ${replySubject}`,
     'Content-Type: text/plain; charset=utf-8',
     `MIME-Version: 1.0`,
