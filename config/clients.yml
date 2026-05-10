@@ -1,33 +1,164 @@
 clients:
-  - name: "AutoPartes Sur"
-    domains: ["autopartessur.cl"]
-    contacts: ["juan@autopartessur.cl", "ventas@autopartessur.cl"]
-    jira_label: "client-autopartessur"
-    tier: "premium"
 
-  - name: "Repuestos del Valle"
-    domains: ["repuestosdelvalle.cl"]
-    contacts: ["contacto@repuestosdelvalle.cl"]
-    jira_label: "client-repuestosvalle"
-    tier: "standard"
+  # ─── ClickRepuestos ───────────────────────────────────────────────────────────
 
-  - name: "AutoPartes Norte"
-    domains: ["autopartesnorte.cl"]
-    contacts: ["gerencia@autopartesnorte.cl"]
-    jira_label: "client-autopartesnorte"
-    tier: "premium"
+  - name: "Repuestos del Sol"
+    domains: ["repuestosdelsol.cl"]
+    contacts:
+      - "administracion@repuestosdelsol.cl"
+      - "ariel@repuestosdelsol.cl"
+      - "jecastro@repuestosdelsol.cl"
+      - "proveedores@repuestosdelsol.cl"
+      - "paolaconcha@repuestosdelsol.cl"
+      - "jim@repuestosdelsol.cl"
+    empresa: "ClickRepuestos"
+    jira_label: "client-repuestosdelsol"
+    facturacion: "recurrente"
 
-  - name: "TecnoRepuestos"
-    domains: ["tecnorepuestos.cl"]
-    contacts: ["soporte@tecnorepuestos.cl", "admin@tecnorepuestos.cl"]
-    jira_label: "client-tecnorepuestos"
-    tier: "standard"
+  - name: "Amortiguadores K"
+    domains: ["amortiguadoresk.cl"]
+    contacts:
+      - "diomarys@amortiguadoresk.cl"
+      - "christian@amortiguadoresk.cl"
+      - "administracion@amortiguadoresk.cl"
+    empresa: ["ClickRepuestos", "WebySEO"]
+    jira_label: "client-amortiguadoresk"
+    facturacion: "recurrente"
 
-  - name: "Distribuidora Automotriz Central"
-    domains: ["dacchile.cl"]
-    contacts: ["operaciones@dacchile.cl"]
-    jira_label: "client-dac"
-    tier: "premium"
+  - name: "Aspillaga Hornauer"
+    domains: ["aspillagahornauer.cl"]
+    contacts:
+      - "mgarrido@aspillagahornauer.cl"
+      - "froldan@aspillagahornauer.cl"
+    empresa: "ClickRepuestos"
+    jira_label: "client-aspillagahornauer"
+    facturacion: "esporadico"
 
-  # Agregar clientes adicionales con el mismo formato
-  # tier: "premium" | "standard" | "trial"
+  - name: "Nutrabody"
+    domains: ["nutrabody.cl"]
+    contacts:
+      - "r.orellana@nutrabody.cl"
+      - "o.garrido@nutrabody.cl"
+    empresa: "ClickRepuestos"
+    jira_label: "client-nutrabody"
+    facturacion: "esporadico"
+
+  # ─── WebySEO ──────────────────────────────────────────────────────────────────
+
+  - name: "TGF Gruppo"
+    domains: ["tgfgruppo.cl"]
+    contacts:
+      - "ozg@tgfgruppo.cl"
+      - "fmogollon@tgfgruppo.cl"
+    empresa: "WebySEO"
+    jira_label: "client-tgfgruppo"
+    facturacion: "esporadico"
+
+  - name: "Karry"
+    domains: ["karry.cl"]
+    contacts:
+      - "cristian@karry.cl"
+    empresa: "WebySEO"
+    jira_label: "client-karry"
+    facturacion: "anual"
+
+  - name: "Kosner"
+    domains: ["kosner.cl"]
+    contacts:
+      - "administracion@kosner.cl"
+    empresa: "WebySEO"
+    jira_label: "client-kosner"
+    facturacion: "anual"
+
+  - name: "AS Automotriz"
+    domains: ["asautomotriz.cl"]
+    contacts:
+      - "asaavedra@asautomotriz.cl"
+    empresa: "WebySEO"
+    jira_label: "client-asautomotriz"
+    facturacion: "anual"
+
+  - name: "Sunny Travel"
+    domains: ["sunnytravel.cl"]
+    contacts:
+      - "info@sunnytravel.cl"
+    empresa: "WebySEO"
+    jira_label: "client-sunnytravel"
+    facturacion: "anual"
+
+  - name: "GSCom"
+    domains: ["gscom.cl"]
+    contacts:
+      - "andres@gscom.cl"
+    empresa: "WebySEO"
+    jira_label: "client-gscom"
+    facturacion: "anual"
+
+  - name: "Megaplaga"
+    domains: ["megaplaga.cl"]
+    contacts:
+      - "gerencia@megaplaga.cl"
+    empresa: "WebySEO"
+    jira_label: "client-megaplaga"
+    facturacion: "anual"
+
+  - name: "Clínica Dental Antofagasta"
+    domains: ["clinicadentalantofagasta.cl"]
+    contacts:
+      - "administracion@clinicadentalantofagasta.cl"
+    empresa: "WebySEO"
+    jira_label: "client-clinicadental"
+    facturacion: "anual"
+
+  - name: "Funeraria Los Valles"
+    domains: ["funerarialosvalles.cl"]
+    contacts:
+      - "contacto@funerarialosvalles.cl"
+    empresa: "WebySEO"
+    jira_label: "client-funerarialosvalles"
+    facturacion: "anual"
+
+  - name: "Top Rental"
+    domains: ["toprental.cl"]
+    contacts:
+      - "info@toprental.cl"
+    empresa: "WebySEO"
+    jira_label: "client-toprental"
+    facturacion: "anual"
+
+  - name: "Secretos del Sur"
+    domains: ["secretosdelsur.cl"]
+    contacts:
+      - "contacto@secretosdelsur.cl"
+    empresa: "WebySEO"
+    jira_label: "client-secretosdelsur"
+    facturacion: "anual"
+
+  # ─── Ambas empresas ───────────────────────────────────────────────────────────
+
+  - name: "QualityPro"
+    domains: ["qualitypro.cl"]
+    contacts:
+      - "agalleguillos@qualitypro.cl"
+      - "cgalleguillos@qualitypro.cl"
+      - "ljimenez@qualitypro.cl"
+    empresa: ["ClickRepuestos", "WebySEO"]
+    jira_label: "client-qualitypro"
+    facturacion: "recurrente"
+
+  - name: "Visla"
+    domains: ["visla.cl"]
+    contacts:
+      - "contacto@visla.cl"
+      - "victor_hugo@visla.cl"
+    empresa: ["ClickRepuestos", "WebySEO"]
+    jira_label: "client-visla"
+    facturacion: "anual"
+
+  - name: "May Energía"
+    domains: ["mayenergia.cl"]
+    contacts:
+      - "ventas@mayenergia.cl"
+    empresa: ["ClickRepuestos", "WebySEO"]
+    jira_label: "client-mayenergia"
+    facturacion: "esporadico"
