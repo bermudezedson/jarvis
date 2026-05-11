@@ -313,6 +313,14 @@ function isInvoice(text) {
   return ['factura', 'boleta', 'cobro', 'pago pendiente', 'invoice'].some(kw => text.includes(kw));
 }
 
+// Regex-based subject check used in pipeline routing to detect team-sent invoices.
+const INVOICE_SUBJECT_PATTERNS = [
+  /factura/i, /nota de cr[eé]dito/i, /boleta/i, /cobro/i, /pago.*pendiente/i,
+];
+function isInvoiceSubject(subject) {
+  return INVOICE_SUBJECT_PATTERNS.some(p => p.test(subject || ''));
+}
+
 function hasPriorityKeyword(text) {
   return rules.mail.priority_keywords.some(kw => text.includes(kw.toLowerCase()));
 }
@@ -407,7 +415,7 @@ function sortAndBuild(classified, mode, days, stats) {
     total_client_threads:    classified.length,
     requiring_my_action:     classified.filter(c => !c.last_sender_is_me).length,
     waiting_client_response: classified.filter(c =>  c.last_sender_is_me).length,
-    high_severity:           classified.filter(c => c.severity === 'high').length,
+    high_severity:           classified.filter(c => c.severity === 'high' && !c.last_sender_is_me).length,
     scan_stats:              stats,
     by_estado:               byEstado,
     by_client:               byClient,
@@ -437,6 +445,8 @@ function refreshStatesFromCache() {
   const active = sqlDb.prepare(`
     SELECT * FROM threads
     WHERE estado NOT IN ('solucionado','archivado','en_jira','informativo')
+    AND (manually_transitioned_at IS NULL
+         OR julianday('now') - julianday(manually_transitioned_at) > 1)
   `).all();
 
   const updateStmt = sqlDb.prepare(`
@@ -557,30 +567,44 @@ async function classifyClientThreads({ mode = 'initial', days = 30 } = {}) {
     const learnedRule = db.findLearnedRule(t.subject, lastFromEmail);
 
     let estado, category, severity, isInformativo;
+    const cReasonSteps = [
+      { step: 'client_match',    matched: true, client: client.name, domain: client.domains[0] },
+      { step: 'learned_rule',    matched: !!learnedRule, rule_id: learnedRule?.id || null, pattern: learnedRule?.pattern_value || null },
+      { step: 'no_action_pattern', matched: isNoAction },
+    ];
+
     if (learnedRule) {
       estado        = learnedRule.correct_estado;
       category      = learnedRule.correct_category;
       severity      = learnedRule.correct_severity || 'none';
       isInformativo = estado === 'informativo';
+    } else if (isNoAction && isInvoiceSubject(t.subject) && lastSenderIsUs) {
+      // Factura enviada por el equipo a cliente → esperando pago, NO informativo
+      estado = 'esperando_cliente'; category = 'factura_enviada'; severity = 'low'; isInformativo = false;
+      cReasonSteps.push({ step: 'invoice_override', result: 'esperando_cliente',
+        reason: `Factura enviada por el equipo a ${client.name}, esperando pago` });
     } else if (isNoAction) {
-      // Facturas, notificaciones, correos enviados por el equipo sin respuesta esperada
-      estado        = 'informativo';
-      category      = 'informativo';
-      severity      = 'none';
-      isInformativo = true;
+      estado = 'informativo'; category = 'informativo'; severity = 'none'; isInformativo = true;
     } else if (lastSenderIsUs) {
-      // Nuestro equipo/CEO respondió último → esperando cliente
       estado        = calculateEstado(true, daysSince);
       category      = 'esperando_respuesta';
       severity      = calculateSeverity(true, daysSince);
       isInformativo = false;
     } else {
-      // Cliente respondió último → requiere acción
       estado        = calculateEstado(false, daysSince);
       category      = 'requiere_accion';
       severity      = calculateSeverity(false, daysSince);
       isInformativo = false;
     }
+
+    cReasonSteps.push({
+      step: 'estado_calc', estado,
+      reason: lastSenderIsUs
+        ? `nosotros respondimos último (${lastFromEmail}), esperando cliente`
+        : `cliente respondió último (${lastFromEmail}) hace ${daysSince}d`,
+    });
+    cReasonSteps.push({ step: 'severity_calc', severity,
+      reason: daysSince > 7 ? `sin respuesta hace ${daysSince} días` : `${daysSince} días de antigüedad` });
 
     db.upsertThread({
       thread_id:           t.id,
@@ -606,6 +630,9 @@ async function classifyClientThreads({ mode = 'initial', days = 30 } = {}) {
       accion_sugerida:     isInformativo ? 'archivar' : lastSenderIsUs ? 'seguimiento' : 'responder',
       jira_suggested:      !isInformativo && daysSince > 7,
       content_hash:        currentHash,
+      classification_reason: JSON.stringify({
+        pipeline: 'client_scan', timestamp: new Date().toISOString(), steps: cReasonSteps,
+      }),
     });
   }
 
@@ -953,12 +980,29 @@ async function processUniversalScan(threads) {
     const lastSenderIsUs   = lastSenderIsCeo || lastSenderIsTeam;
 
     let estado, category, severity, isInformativo;
+    const reasonSteps = [
+      { step: 'spam_domain',      matched: false, note: `dominio ${fromDomain} no está bloqueado` },
+      { step: 'exclude_subject',  matched: false },
+      { step: 'learned_rule',     matched: !!learnedRule, rule_id: learnedRule?.id || null, pattern: learnedRule?.pattern_value || null },
+      { step: 'no_action_pattern',matched: isNoAction },
+      { step: 'source_type',      result: sourceType,
+        detail: sourceType === 'client'   ? `cliente ${client?.name} (${client?.domains?.[0]})` :
+                sourceType === 'provider' ? `proveedor ${provider?.name}` :
+                sourceType === 'internal' ? 'dominio del equipo' : 'desconocido' },
+    ];
+    if (aiClassification) reasonSteps.push({ step: 'ai_classification', result: aiClassification });
 
     if (learnedRule) {
       estado        = learnedRule.correct_estado;
       category      = learnedRule.correct_category;
       severity      = learnedRule.correct_severity || 'none';
       isInformativo = estado === 'informativo';
+    } else if (isNoAction && isInvoiceSubject(t.subject) && sourceType === 'client' && lastSenderIsUs) {
+      // Factura enviada por el equipo a cliente conocido → esperando pago
+      estado = 'esperando_cliente'; category = 'factura_enviada'; severity = 'low'; isInformativo = false;
+      reasonSteps.push({ step: 'invoice_override', result: 'esperando_cliente',
+        reason: `Factura enviada por el equipo a ${client?.name}, esperando pago` });
+      stats.breakdown.client++;
     } else if (isNoAction) {
       estado = 'informativo'; category = 'informativo'; severity = 'none'; isInformativo = true;
       stats.breakdown.informativo_auto++;
@@ -966,24 +1010,24 @@ async function processUniversalScan(threads) {
       estado = 'informativo'; category = 'interno'; severity = 'none'; isInformativo = true;
       stats.breakdown.internal++;
     } else if (sourceType === 'provider') {
-      // Provider: informativo unless has alert keyword
-      const isAlert = (provider.alert_keywords || []).some(kw =>
+      const matchedKw = (provider.alert_keywords || []).find(kw =>
         subjectLow.includes(kw.toLowerCase()) || (t.snippet || '').toLowerCase().includes(kw.toLowerCase())
       );
-      if (isAlert) {
+      if (matchedKw) {
         estado = 'requiere_mi_accion'; category = 'alerta_proveedor'; severity = 'high'; isInformativo = false;
+        reasonSteps.push({ step: 'provider_alert', matched: true, keyword: matchedKw });
       } else {
         estado = 'informativo'; category = 'proveedor'; severity = 'none'; isInformativo = true;
+        reasonSteps.push({ step: 'provider_alert', matched: false });
       }
       stats.breakdown.provider++;
     } else if (sourceType === 'client') {
-      estado        = calculateEstado(!lastSenderIsUs, daysSince);
+      estado        = calculateEstado(lastSenderIsUs, daysSince);
       category      = lastSenderIsUs ? 'esperando_respuesta' : 'requiere_accion';
       severity      = calculateSeverity(!lastSenderIsUs, daysSince);
       isInformativo = false;
       stats.breakdown.client++;
     } else {
-      // unknown — route by AI classification
       const cls = aiClassification || 'plataforma';
       if (cls === 'prospecto_nuevo') {
         estado = 'requiere_mi_accion'; category = 'prospecto_nuevo'; severity = 'medium'; isInformativo = false;
@@ -992,11 +1036,26 @@ async function processUniversalScan(threads) {
         estado = 'informativo'; category = 'personal'; severity = 'none'; isInformativo = true;
         stats.breakdown.personal++;
       } else {
-        // plataforma / proveedor clasificado por IA
         estado = 'informativo'; category = cls; severity = 'none'; isInformativo = true;
         stats.breakdown.plataforma++;
       }
     }
+
+    reasonSteps.push({
+      step:   'estado_calc',
+      estado,
+      reason: lastSenderIsUs
+        ? `nosotros respondimos último, esperando cliente`
+        : `cliente respondió último hace ${daysSince}d`,
+    });
+    reasonSteps.push({ step: 'severity_calc', severity,
+      reason: daysSince > 7 ? `sin respuesta hace ${daysSince} días` : `${daysSince} días de antigüedad` });
+
+    const classification_reason = JSON.stringify({
+      pipeline:  'universal_scan',
+      timestamp: new Date().toISOString(),
+      steps:     reasonSteps,
+    });
 
     // ── Persist ──────────────────────────────────────────────────────────────
 
@@ -1024,6 +1083,7 @@ async function processUniversalScan(threads) {
       accion_sugerida:     isInformativo ? 'archivar' : lastSenderIsUs ? 'seguimiento' : 'responder',
       jira_suggested:      !isInformativo && daysSince > 7,
       content_hash:        currentHash,
+      classification_reason,
     };
 
     // Inject universal-scan extra fields via direct SQL after upsert

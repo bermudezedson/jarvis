@@ -64,15 +64,22 @@ router.get('/dashboard', (req, res) => {
     clientPulse = clientPulseSkill.getPulse();
   } catch {}
 
+  let threadMetrics = null;
+  try {
+    const { getDashboardMetrics } = require('../skills/metrics');
+    threadMetrics = getDashboardMetrics();
+  } catch { /* non-fatal if DB not ready */ }
+
   res.json({
-    briefing: briefing || null,
-    client_threads: clientThreads || null,
-    mail: mailClassifications || null,
-    commitments: commitments || null,
-    client_pulse: clientPulse || null,
-    last_refresh: lastRefresh,
-    has_real_data: !!(briefing || clientThreads),
-    timestamp: new Date().toISOString(),
+    briefing:       briefing        || null,
+    client_threads: clientThreads   || null,
+    thread_metrics: threadMetrics,
+    mail:           mailClassifications || null,
+    commitments:    commitments     || null,
+    client_pulse:   clientPulse     || null,
+    last_refresh:   lastRefresh,
+    has_real_data:  !!(briefing || clientThreads),
+    timestamp:      new Date().toISOString(),
   });
 });
 
@@ -118,6 +125,16 @@ router.get('/config/clients', (req, res) => {
   const filePath = path.join(__dirname, '../../config/clients.yml');
   const data = yaml.load(fs.readFileSync(filePath, 'utf8'));
   res.json(data);
+});
+
+// ─── Métricas unificadas ─────────────────────────────────────────────────────
+router.get('/dashboard/metrics', (req, res) => {
+  try {
+    const { getDashboardMetrics } = require('../skills/metrics');
+    res.json(getDashboardMetrics());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── Phase 2 endpoints ────────────────────────────────────────────────────────
@@ -307,7 +324,7 @@ router.get('/mail/uncategorized', (req, res) => {
       SELECT * FROM threads
       WHERE source_type = 'unknown'
         AND estado NOT IN ('solucionado','archivado')
-        AND ai_classification != 'spam'
+        AND (ai_classification IS NULL OR ai_classification != 'spam')
       ORDER BY
         CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 ELSE 3 END,
         date DESC
@@ -936,13 +953,246 @@ router.get('/mail/learned-rules', (req, res) => {
   }
 });
 
+// ─── Auditoría de reglas ─────────────────────────────────────────────────────
+router.get('/mail/audit-rules', (req, res) => {
+  try {
+    const { runAudit } = require('../skills/rule-auditor');
+    res.json(runAudit());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Rules-full: todas las reglas del sistema consolidadas ──────────────────
+router.get('/mail/rules-full', (req, res) => {
+  try {
+    const db   = require('../db/database');
+    const yaml = require('js-yaml');
+    const fs   = require('fs');
+    const p    = require('path');
+
+    const rules    = yaml.load(fs.readFileSync(p.join(__dirname, '../../config/rules.yml'), 'utf8'));
+    const providers = (() => {
+      try { return yaml.load(fs.readFileSync(p.join(__dirname, '../../config/providers.yml'), 'utf8')); }
+      catch { return { providers: [] }; }
+    })();
+    const sm = rules.state_machine || {};
+
+    // Learned rules enriched with feedback/thread origin
+    const rawRules = db.getDb().prepare(`
+      SELECT lr.*,
+             f.ceo_explanation, f.thread_id as fb_thread_id,
+             t.subject as fb_subject, t.last_from as fb_from, t.date as fb_date
+      FROM learned_rules lr
+      LEFT JOIN feedback f ON f.id = lr.source_feedback_id
+      LEFT JOIN threads  t ON t.thread_id = f.thread_id
+      ORDER BY lr.id ASC
+    `).all();
+
+    const learned_rules = rawRules.map(r => ({
+      id:           r.id,
+      pattern:      r.pattern_value,
+      match_type:   r.pattern_type,
+      action:       r.correct_estado,
+      category:     r.correct_category,
+      active:       !!r.active,
+      times_applied: r.match_count || 0,
+      created_at:   r.created_at,
+      origin:       r.ceo_explanation
+        ? `Feedback: "${r.ceo_explanation.substring(0, 80)}${r.ceo_explanation.length > 80 ? '…' : ''}"`
+        : null,
+      example_thread: r.fb_subject ? {
+        thread_id: r.fb_thread_id,
+        subject:   r.fb_subject,
+        from:      r.fb_from,
+        date:      r.fb_date,
+      } : null,
+    }));
+
+    res.json({
+      learned_rules,
+      config_rules: {
+        no_action_patterns: {
+          description: 'Correos que se clasifican como informativos automáticamente',
+          patterns: rules.mail?.no_action_patterns || [],
+        },
+        exclude_patterns: {
+          description: 'Correos descartados sin guardar en el dashboard',
+          patterns: rules.mail?.exclude_patterns || [],
+        },
+        spam_domains: {
+          description: 'Dominios bloqueados — correos descartados',
+          domains: rules.mail?.spam_domains || [],
+        },
+        blacklist: {
+          discard_domains:  rules.blacklist?.discard_domains  || [],
+          discard_subjects: rules.blacklist?.discard_subjects || [],
+        },
+        priority_keywords: {
+          description: 'Keywords que marcan un correo como urgente',
+          keywords: rules.mail?.priority_keywords || [],
+        },
+        providers: {
+          description: 'Proveedores conocidos con alertas configuradas',
+          items: providers.providers || [],
+        },
+      },
+      state_machine_rules: {
+        informativo_auto_archive_days: sm.informativo_auto_archive_days || 7,
+        invoice_days_without_response_to_pending: sm.invoice_rules?.days_without_response_to_pending || 15,
+        waiting_escalation_days: sm.waiting_escalation_days || 14,
+        auto_resolve_keywords: sm.invoice_rules?.auto_resolve_keywords || [],
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Gestión de reglas aprendidas ────────────────────────────────────────────
+
 router.put('/mail/learned-rules/:id', (req, res) => {
   try {
     const { id } = req.params;
-    const { active } = req.body;
+    const { active, pattern, match_type, action, category } = req.body;
     const db = require('../db/database');
-    db.getDb().prepare('UPDATE learned_rules SET active = ? WHERE id = ?').run(active ? 1 : 0, Number(id));
-    res.json({ success: true, id: Number(id), active: !!active });
+    const numId = Number(id);
+
+    if (active !== undefined && Object.keys(req.body).length === 1) {
+      // Toggle-only update (legacy behaviour from RulesPanel toggle)
+      db.getDb().prepare('UPDATE learned_rules SET active = ? WHERE id = ?').run(active ? 1 : 0, numId);
+      return res.json({ success: true, id: numId, active: !!active });
+    }
+
+    // Full edit
+    const fields = [];
+    const values = [];
+    if (pattern    !== undefined) { fields.push('pattern_value = ?');     values.push(pattern); }
+    if (match_type !== undefined) { fields.push('pattern_type = ?');      values.push(match_type); }
+    if (action     !== undefined) { fields.push('correct_estado = ?');    values.push(action); }
+    if (category   !== undefined) { fields.push('correct_category = ?');  values.push(category); }
+    if (active     !== undefined) { fields.push('active = ?');            values.push(active ? 1 : 0); }
+    if (fields.length === 0) return res.status(400).json({ error: 'Nothing to update' });
+
+    values.push(numId);
+    db.getDb().prepare(`UPDATE learned_rules SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    const updated = db.getDb().prepare('SELECT * FROM learned_rules WHERE id = ?').get(numId);
+    res.json({ success: true, rule: updated });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/mail/learned-rules/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const db = require('../db/database');
+    const numId = Number(id);
+    const existing = db.getDb().prepare('SELECT id, match_count FROM learned_rules WHERE id = ?').get(numId);
+    if (!existing) return res.status(404).json({ error: 'Regla no encontrada' });
+    db.getDb().prepare('DELETE FROM learned_rules WHERE id = ?').run(numId);
+    logger.info('Learned rule deleted', { id: numId });
+    res.json({ success: true, id: numId, was_applied: existing.match_count || 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/mail/learned-rules/deduplicate', (req, res) => {
+  try {
+    const db    = require('../db/database');
+    const sqlDb = db.getDb();
+    const all   = sqlDb.prepare('SELECT * FROM learned_rules ORDER BY id ASC').all();
+
+    // Group by lowercase pattern_value
+    const groups = {};
+    for (const rule of all) {
+      const key = rule.pattern_value.toLowerCase().trim();
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(rule);
+    }
+
+    let deleted = 0;
+    for (const [, group] of Object.entries(groups)) {
+      if (group.length <= 1) continue;
+      const [keep, ...dupes] = group; // keep oldest (lowest id)
+      const totalMatches = group.reduce((s, r) => s + (r.match_count || 0), 0);
+      sqlDb.prepare('UPDATE learned_rules SET match_count = ? WHERE id = ?').run(totalMatches, keep.id);
+      for (const dupe of dupes) {
+        sqlDb.prepare('DELETE FROM learned_rules WHERE id = ?').run(dupe.id);
+        deleted++;
+      }
+    }
+
+    logger.info('Learned rules deduplicated', { deleted });
+    res.json({ success: true, deleted, message: `${deleted} regla${deleted !== 1 ? 's' : ''} duplicada${deleted !== 1 ? 's' : ''} eliminada${deleted !== 1 ? 's' : ''}.` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ¿Por qué está clasificado así? ─────────────────────────────────────────
+
+router.get('/mail/thread/:threadId/why', (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const db     = require('../db/database');
+    const thread = db.getDb().prepare('SELECT * FROM threads WHERE thread_id = ?').get(threadId);
+    if (!thread) return res.status(404).json({ error: 'Thread no encontrado' });
+
+    let steps = [];
+    let pipelineLabel = 'desconocido';
+    let pipelineTs    = null;
+
+    if (thread.classification_reason) {
+      try {
+        const parsed = JSON.parse(thread.classification_reason);
+        steps        = parsed.steps || [];
+        pipelineLabel = parsed.pipeline === 'universal_scan' ? 'Universal scan' : 'Client scan';
+        pipelineTs    = parsed.timestamp;
+      } catch { /* malformed JSON */ }
+    }
+
+    // Human-readable explanation
+    const sourceStep   = steps.find(s => s.step === 'source_type' || s.step === 'client_match');
+    const estadoStep   = steps.find(s => s.step === 'estado_calc');
+    const severityStep = steps.find(s => s.step === 'severity_calc');
+    const learnedStep  = steps.find(s => s.step === 'learned_rule' && s.matched);
+    const noActionStep = steps.find(s => s.step === 'no_action_pattern' && s.matched);
+    const provAlertStep = steps.find(s => s.step === 'provider_alert');
+
+    let explanation = '';
+    if (learnedStep) {
+      explanation = `Una regla aprendida coincidió (patrón "${learnedStep.pattern}") y forzó el estado "${thread.estado}".`;
+    } else if (noActionStep) {
+      explanation = `El asunto coincide con un patrón de "sin acción requerida", por lo que se clasificó como informativo.`;
+    } else if (sourceStep?.result === 'client' || sourceStep?.step === 'client_match') {
+      const clientName = sourceStep.client || thread.client_name || 'cliente';
+      explanation = `Este correo es de un cliente conocido (${clientName}).` +
+        (estadoStep?.reason ? ` ${estadoStep.reason.charAt(0).toUpperCase() + estadoStep.reason.slice(1)}.` : '') +
+        (severityStep?.reason ? ` Severity ${thread.severity}: ${severityStep.reason}.` : '');
+    } else if (sourceStep?.result === 'provider') {
+      explanation = `Remitente identificado como proveedor (${sourceStep.detail || thread.client_name}).` +
+        (provAlertStep?.matched ? ` Alerta detectada por keyword "${provAlertStep.keyword}".` : ' Sin alertas activas → informativo.');
+    } else if (sourceStep?.result === 'internal') {
+      explanation = `Dominio del equipo interno → clasificado como informativo.`;
+    } else if (thread.ai_classification) {
+      explanation = `Dominio desconocido. La IA lo clasificó como "${thread.ai_classification}".`;
+    } else {
+      explanation = `Clasificación automática basada en estado y antigüedad del hilo.`;
+    }
+
+    res.json({
+      thread_id:       threadId,
+      subject:         thread.subject,
+      current_estado:  thread.estado,
+      current_severity: thread.severity,
+      pipeline:        pipelineLabel,
+      pipeline_ts:     pipelineTs,
+      explanation,
+      steps,
+      has_reason:      !!thread.classification_reason,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

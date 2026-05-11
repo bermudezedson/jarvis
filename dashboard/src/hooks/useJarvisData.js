@@ -59,13 +59,12 @@ export function useJarvisData() {
   }, [fetchDashboard, viewMode]);
 
   return {
-    // Individual data slices for components
-    briefing:      dashboardData?.briefing      ?? null,
+    briefing:      dashboardData?.briefing       ?? null,
     clientThreads: dashboardData?.client_threads ?? null,
-    commitments:   dashboardData?.commitments   ?? null,
-    clientPulse:   dashboardData?.client_pulse  ?? null,
-    // Legacy: expose `data` as briefing for any remaining component that uses it
-    data:          dashboardData?.briefing      ?? null,
+    threadMetrics: dashboardData?.thread_metrics ?? null,
+    commitments:   dashboardData?.commitments    ?? null,
+    clientPulse:   dashboardData?.client_pulse   ?? null,
+    data:          dashboardData?.briefing       ?? null,
     loading,
     error,
     lastRefresh,

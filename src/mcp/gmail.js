@@ -88,6 +88,15 @@ function decodeBody(part, preferredType = 'text/plain') {
   return '';
 }
 
+// Convert any date string (RFC 2822 or ISO) to ISO 8601 so SQLite date functions work.
+function parseDate(raw) {
+  if (!raw) return null;
+  try {
+    const d = new Date(raw);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  } catch { return null; }
+}
+
 function normalizeThread(t) {
   const messages = t.messages || [];
   const lastMsg  = messages[messages.length - 1];
@@ -119,8 +128,8 @@ function normalizeThread(t) {
     to:              header(lastHdrs, 'to'),
     snippet:         t.snippet || lastMsg?.snippet || '',
     body:            decodeBody(lastMsg?.payload),
-    date:            header(lastHdrs,  'date'),   // date of last message
-    original_date:   header(firstHdrs, 'date'),   // date thread started
+    date:            parseDate(header(lastHdrs,  'date')),   // ISO 8601, compatible con SQLite
+    original_date:   parseDate(header(firstHdrs, 'date')),
     unread:          (lastMsg?.labelIds || []).includes('UNREAD'),
     sent:            (lastMsg?.labelIds || []).includes('SENT'),
     labels:          lastMsg?.labelIds || [],

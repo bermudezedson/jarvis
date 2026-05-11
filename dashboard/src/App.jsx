@@ -39,7 +39,7 @@ const TABS = [
 
 export default function App() {
   const {
-    briefing, clientThreads, commitments, clientPulse,
+    briefing, clientThreads, threadMetrics, commitments, clientPulse,
     loading, error, lastRefresh, viewMode, setViewMode, refresh,
   } = useJarvisData();
 
@@ -117,13 +117,13 @@ export default function App() {
 
           {hasAnyData && (
             <main className="cockpit-main">
-              <StatusBar clientThreads={clientThreads} metrics={briefing?.metrics} />
+              <StatusBar clientThreads={clientThreads} metrics={briefing?.metrics} threadMetrics={threadMetrics} />
 
               <div className="briefing-grid">
                 {/* ── Left: Client action list ── */}
                 <section className="zone zone-action">
                   <h2 className="zone-title">Correos de Clientes</h2>
-                  <ClientActionList clientThreads={clientThreads} />
+                  <ClientActionList clientThreads={clientThreads} threadMetrics={threadMetrics} />
                 </section>
 
                 {/* ── Right: Risk radar + Agenda ── */}
@@ -135,6 +135,7 @@ export default function App() {
                       briefing={briefing}
                       commitments={commitments}
                       clientPulse={clientPulse}
+                      threadMetrics={threadMetrics}
                     />
                   </section>
                   <section className="zone zone-agenda">
@@ -155,7 +156,7 @@ export default function App() {
         <main className="cockpit-main">
           <section className="zone zone-mail-full">
             <h2 className="zone-title">Correos de Clientes</h2>
-            <ClientThreads />
+            <ClientThreads threadMetrics={threadMetrics} />
           </section>
           <section className="zone zone-mail-full" style={{ marginTop: '1.5rem' }}>
             <h2 className="zone-title">Bandeja General</h2>

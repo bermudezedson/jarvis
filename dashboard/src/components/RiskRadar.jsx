@@ -1,17 +1,15 @@
 const DOT = { high: 'dot-red', medium: 'dot-yellow', low: 'dot-green', info: 'dot-blue' };
 
-function generateRisks(clientThreads, briefing, commitments, clientPulse) {
+function generateRisks(clientThreads, briefing, commitments, clientPulse, threadMetrics) {
   const risks = [];
   const m = briefing?.metrics;
 
-  // 1. Client threads requiring urgent action
-  const highUrgent = clientThreads?.items?.filter(
-    t => t.severity === 'high' && !t.last_sender_is_me && t.estado !== 'archivado'
-  ) || [];
-  if (highUrgent.length > 0) {
+  // 1. Client threads requiring urgent action — count from metrics (single source of truth)
+  const urgentCount = threadMetrics?.correos_urgentes ?? 0;
+  if (urgentCount > 0) {
     risks.push({
       severity: 'high',
-      message: `${highUrgent.length} correo${highUrgent.length > 1 ? 's' : ''} de cliente${highUrgent.length > 1 ? 's' : ''} sin responder hace +7 días`,
+      message: `${urgentCount} correo${urgentCount > 1 ? 's' : ''} de cliente${urgentCount > 1 ? 's' : ''} sin responder hace +7 días`,
       action: 'Credibilidad comercial en riesgo — responder hoy',
     });
   }
@@ -105,8 +103,8 @@ function RiskItem({ alert }) {
   );
 }
 
-export default function RiskRadar({ clientThreads, briefing, commitments, clientPulse }) {
-  const risks = generateRisks(clientThreads, briefing, commitments, clientPulse);
+export default function RiskRadar({ clientThreads, briefing, commitments, clientPulse, threadMetrics }) {
+  const risks = generateRisks(clientThreads, briefing, commitments, clientPulse, threadMetrics);
 
   // If no data at all, show a neutral state
   if (!clientThreads && !briefing) {

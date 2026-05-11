@@ -12,13 +12,16 @@ function MetricCard({ label, value, sub, borderColor, subColor }) {
   );
 }
 
-export default function StatusBar({ clientThreads, metrics }) {
+export default function StatusBar({ metrics, threadMetrics }) {
   const nm = metrics?.next_meeting;
 
-  const clientSub = clientThreads == null
+  const urgentes     = threadMetrics?.correos_urgentes ?? 0;
+  const correoAccion = threadMetrics?.correos_accion   ?? null;
+
+  const clientSub = threadMetrics == null
     ? 'Sin datos — escanear clientes'
-    : clientThreads.high_severity > 0
-      ? `${clientThreads.high_severity} urgentes sin responder`
+    : urgentes > 0
+      ? `${urgentes} urgentes sin responder`
       : 'Sin correos urgentes';
 
   const jiraSub = metrics == null
@@ -43,10 +46,10 @@ export default function StatusBar({ clientThreads, metrics }) {
     <div className="status-bar">
       <MetricCard
         label="Correos de clientes"
-        value={clientThreads?.requiring_my_action ?? '—'}
+        value={correoAccion}
         sub={clientSub}
         borderColor="#ef4444"
-        subColor={clientThreads?.high_severity > 0 ? '#ef4444' : undefined}
+        subColor={urgentes > 0 ? '#ef4444' : undefined}
       />
       <MetricCard
         label="Tareas Jira hoy"

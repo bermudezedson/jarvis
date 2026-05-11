@@ -51,13 +51,19 @@ function transition(threadId, newEstado, note = '') {
     UPDATE threads SET
       estado = ?, severity = ?,
       is_informativo = ?,
-      last_sender_is_me = CASE WHEN ? = 'esperando_cliente' THEN 1 ELSE last_sender_is_me END,
+      last_sender_is_me = CASE
+        WHEN ? = 'esperando_cliente' THEN 1
+        WHEN ? = 'pendiente'         THEN 0
+        ELSE last_sender_is_me
+      END,
+      manually_transitioned_at = datetime('now'),
       updated_at = datetime('now')
     WHERE thread_id = ?
   `).run(
     newEstado,
     newSeverity,
     newEstado === 'informativo' ? 1 : 0,
+    newEstado,
     newEstado,
     threadId,
   );
@@ -84,12 +90,24 @@ async function runAutoRules() {
   const results = { auto_archived: 0, auto_resolved: 0, escalated: 0 };
 
   // 1. Auto-archive informativos older than N days (based on updated_at)
-  const archiveDays = sm.informativo_auto_archive_days || 7;
+  // Safety net: never auto-archive team-sent invoices — those must escalate via rule 4.
+  const archiveDays  = sm.informativo_auto_archive_days || 7;
+  const pendingDaysGuard = sm.invoice_rules?.days_without_response_to_pending || 15;
   const oldInfo = db.getDb().prepare(`
     SELECT thread_id FROM threads
     WHERE estado = 'informativo'
     AND julianday('now') - julianday(updated_at) > ?
-  `).all(archiveDays);
+    AND NOT (
+      (last_sender_is_me = 1 OR last_sender_is_team = 1)
+      AND julianday('now') - julianday(date) < ?
+      AND (
+        LOWER(subject) LIKE '%factura%'
+        OR LOWER(subject) LIKE '%nota de cr%dito%'
+        OR LOWER(subject) LIKE '%boleta%'
+        OR LOWER(subject) LIKE '%cobro%'
+      )
+    )
+  `).all(archiveDays, pendingDaysGuard);
 
   oldInfo.forEach(t => {
     db.archiveThread(t.thread_id, `Auto-archivado tras ${archiveDays} días sin actividad`);

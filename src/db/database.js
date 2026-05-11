@@ -179,6 +179,8 @@ function initTables() {
     `ALTER TABLE threads ADD COLUMN source_type TEXT DEFAULT 'unknown'`,
     `ALTER TABLE threads ADD COLUMN ai_classification TEXT DEFAULT NULL`,
     `ALTER TABLE threads ADD COLUMN is_new_contact INTEGER DEFAULT 0`,
+    `ALTER TABLE threads ADD COLUMN manually_transitioned_at TEXT DEFAULT NULL`,
+    `ALTER TABLE threads ADD COLUMN classification_reason TEXT DEFAULT NULL`,
   ];
   for (const sql of alterStatements) {
     try { db.exec(sql); } catch { /* column already exists */ }
@@ -230,8 +232,9 @@ function threadToApiFormat(r) {
     resolution_time_hours: t.resolution_time_hours,
     resolution_note:   t.resolution_note,
     gmail_link:        t.gmail_link,
-    ai_summary:        t.ai_summary        || null,
-    summary_generated_at: t.summary_generated_at || null,
+    ai_summary:             t.ai_summary             || null,
+    summary_generated_at:   t.summary_generated_at   || null,
+    classification_reason:  t.classification_reason  || null,
   };
 }
 
@@ -246,14 +249,16 @@ function upsertThread(thread) {
       last_sender_is_me, last_sender_is_team, is_informativo,
       category, estado, severity,
       client_name, client_domain, client_empresa, client_jira_label,
-      accion_sugerida, jira_suggested, content_hash, updated_at, gmail_link
+      accion_sugerida, jira_suggested, content_hash, updated_at, gmail_link,
+      classification_reason
     ) VALUES (
       @thread_id, @subject, @original_from, @last_from, @last_from_email,
       @snippet, @message_count, @participants, @date, @original_date,
       @last_sender_is_me, @last_sender_is_team, @is_informativo,
       @category, @estado, @severity,
       @client_name, @client_domain, @client_empresa, @client_jira_label,
-      @accion_sugerida, @jira_suggested, @content_hash, datetime('now'), @gmail_link
+      @accion_sugerida, @jira_suggested, @content_hash, datetime('now'), @gmail_link,
+      @classification_reason
     )
     ON CONFLICT(thread_id) DO UPDATE SET
       subject              = excluded.subject,
@@ -277,20 +282,23 @@ function upsertThread(thread) {
         THEN 'none'
         ELSE excluded.severity
       END,
-      accion_sugerida = excluded.accion_sugerida,
-      jira_suggested  = excluded.jira_suggested,
-      content_hash    = excluded.content_hash,
-      updated_at      = datetime('now')
+      accion_sugerida          = excluded.accion_sugerida,
+      jira_suggested           = excluded.jira_suggested,
+      content_hash             = excluded.content_hash,
+      classification_reason    = excluded.classification_reason,
+      manually_transitioned_at = NULL,
+      updated_at               = datetime('now')
   `);
 
   return stmt.run({
     ...thread,
-    participants:         JSON.stringify(thread.participants || []),
-    last_sender_is_me:    thread.last_sender_is_me    ? 1 : 0,
-    last_sender_is_team:  thread.last_sender_is_team  ? 1 : 0,
-    is_informativo:       thread.is_informativo        ? 1 : 0,
-    jira_suggested:       thread.jira_suggested        ? 1 : 0,
-    gmail_link:           `https://mail.google.com/mail/u/0/#inbox/${thread.thread_id}`,
+    participants:           JSON.stringify(thread.participants || []),
+    last_sender_is_me:      thread.last_sender_is_me    ? 1 : 0,
+    last_sender_is_team:    thread.last_sender_is_team  ? 1 : 0,
+    is_informativo:         thread.is_informativo        ? 1 : 0,
+    jira_suggested:         thread.jira_suggested        ? 1 : 0,
+    gmail_link:             `https://mail.google.com/mail/u/0/#inbox/${thread.thread_id}`,
+    classification_reason:  thread.classification_reason || null,
   });
 }
 
@@ -347,7 +355,7 @@ function getClientThreadsSummary(scanStats) {
     total_client_threads:    items.length,
     requiring_my_action:     actionable.filter(t => !t.last_sender_is_me).length,
     waiting_client_response: actionable.filter(t =>  t.last_sender_is_me).length,
-    high_severity:           actionable.filter(t => t.severity === 'high').length,
+    high_severity:           actionable.filter(t => t.severity === 'high' && !t.last_sender_is_me).length,
     scan_stats:              scanStats || null,
     by_estado:               byEstado,
     by_client:               byClient,

@@ -29,8 +29,10 @@ mail:
     - "Certificado SSL"
     - "Duplicator"
     - "Weekly Duplicator"
-    - "Advertencia del uso del disco"
-    - "cPanel"
+
+    - "cPanel Backup"
+    - "cPanel Statistics"
+    - "cPanel Cronjob"
     - "Renovación de Hosting"
     - "Pago recibido"
     - "Confirmación de pago"
@@ -87,6 +89,12 @@ mail:
     - "nota de crédito"
     - "no funciona"
     - "problema"
+    - "bloqueado"
+    - "suspendido"
+    - "vencido"
+    - "mora"
+    - "plazo"
+    - "hoy sin falta"
   client_request_keywords:
     - "necesito"
     - "solicito"
@@ -150,6 +158,11 @@ state_machine:
       - "ya fue pagado"
       - "deposito realizado"
       - "depósito realizado"
+      - "adjunto pago"
+      - "adjunto comprobante"
+      - "pago respectivo"
+      - "comprobante de pago"
+      - "pago adjunto"
 
 commitments:
   trigger_phrases:

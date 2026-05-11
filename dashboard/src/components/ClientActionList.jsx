@@ -334,6 +334,9 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, 
   const [replyMode,      setReplyMode]      = useState('reply'); // 'reply' | 'reply_all'
   const [summary,        setSummary]        = useState(t.ai_summary || null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [showWhy,        setShowWhy]        = useState(false);
+  const [whyData,        setWhyData]        = useState(null);
+  const [whyLoading,     setWhyLoading]     = useState(false);
 
   // Lazy-generate summary in background on mount
   useEffect(() => {
@@ -575,7 +578,59 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, 
                 🔇
               </button>
             )}
+
+            {/* ¿Por qué? — trazabilidad de clasificación */}
+            <button
+              className={`ctl-btn ctl-btn-why ${showWhy ? 'active' : ''}`}
+              title="¿Por qué Jarvis clasificó este correo así?"
+              onClick={async e => {
+                e.stopPropagation();
+                if (showWhy) { setShowWhy(false); return; }
+                if (!whyData) {
+                  setWhyLoading(true);
+                  try {
+                    const res  = await fetch(`${API}/mail/thread/${t.thread_id}/why`);
+                    const data = await res.json();
+                    setWhyData(data);
+                  } catch { /* silent */ }
+                  setWhyLoading(false);
+                }
+                setShowWhy(true);
+              }}
+            >
+              {whyLoading ? '…' : '?'}
+            </button>
           </div>
+
+          {/* ¿Por qué? panel */}
+          {showWhy && whyData && (
+            <div className="why-panel" onClick={e => e.stopPropagation()}>
+              <div className="why-title">📋 ¿Por qué está aquí?</div>
+              <div className="why-pipeline">Pipeline: {whyData.pipeline}{whyData.pipeline_ts ? ` · ${new Date(whyData.pipeline_ts).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}</div>
+              <div className="why-explanation">{whyData.explanation}</div>
+              {!whyData.has_reason && (
+                <div className="why-no-reason">Sin trazabilidad detallada — el correo fue procesado antes de que se implementara esta función. Corre un nuevo scan para actualizar.</div>
+              )}
+              {whyData.steps?.length > 0 && (
+                <details className="why-steps-details">
+                  <summary className="why-steps-toggle">Ver pasos de clasificación ({whyData.steps.length})</summary>
+                  <div className="why-steps">
+                    {whyData.steps.map((s, i) => (
+                      <div key={i} className={`why-step ${s.matched === false ? 'step-pass' : s.matched ? 'step-match' : ''}`}>
+                        <span className="step-name">{s.step}</span>
+                        {s.matched === true  && <span className="step-badge match">✓ coincide</span>}
+                        {s.matched === false && <span className="step-badge pass">— no aplica</span>}
+                        {s.result  && <span className="step-detail">{s.result}</span>}
+                        {s.reason  && <span className="step-detail">{s.reason}</span>}
+                        {s.detail  && <span className="step-detail">{s.detail}</span>}
+                        {s.note    && <span className="step-detail">{s.note}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -753,7 +808,7 @@ function AiClassBadge({ cls }) {
   return <span className={`ai-class-badge ${info.cls}`}>{info.label}</span>;
 }
 
-export default function ClientActionList({ clientThreads }) {
+export default function ClientActionList({ clientThreads, threadMetrics }) {
   const [localItems,    setLocalItems]    = useState([]);
   const [activeFilter,  setActiveFilter]  = useState('urgente');
   const [jiraStatus,    setJiraStatus]    = useState({});
@@ -833,7 +888,7 @@ export default function ClientActionList({ clientThreads }) {
       if (newEstado === 'informativo') { updates.severity = 'none'; updates.is_informativo = 1; }
       if (newEstado === 'requiere_mi_accion') { updates.severity = 'high'; updates.last_sender_is_me = 0; }
       if (newEstado === 'esperando_cliente')  { updates.last_sender_is_me = 1; }
-      if (newEstado === 'pendiente') { updates.last_sender_is_me = 0; }
+      if (newEstado === 'pendiente') { updates.last_sender_is_me = 0; updates.severity = 'low'; }
       return { ...t, ...updates };
     }));
     try {
@@ -923,21 +978,22 @@ export default function ClientActionList({ clientThreads }) {
     );
   }
 
+  // Mismo criterio que metrics.js — URGENTE_ESTADOS whitelist
+  const URGENTE_EST = ['requiere_mi_accion', 'esperando_nosotros', 'pendiente'];
   const active      = localItems.filter(t => t.estado !== 'archivado' && t.estado !== 'solucionado');
-  const actionable  = active.filter(t => t.estado !== 'informativo');
-  const urgent      = actionable.filter(t => t.severity === 'high'  && !t.last_sender_is_me);
-  const pending     = actionable.filter(t => t.severity !== 'high'  && !t.last_sender_is_me);
-  const waiting     = actionable.filter(t => t.last_sender_is_me);
+  const urgent      = active.filter(t => URGENTE_EST.includes(t.estado) && !t.last_sender_is_me && (t.severity === 'high' || t.severity === 'critical'));
+  const pending     = active.filter(t => URGENTE_EST.includes(t.estado) && !t.last_sender_is_me && t.severity !== 'high' && t.severity !== 'critical');
+  const waiting     = active.filter(t => t.estado === 'esperando_cliente');
   const informativos= active.filter(t => t.estado === 'informativo');
 
   const counts = {
-    urgente:     urgent.length,
-    pending:     pending.length,
-    waiting:     waiting.length,
-    informativo: informativos.length,
+    urgente:     threadMetrics?.correos_urgentes    ?? urgent.length,
+    pending:     threadMetrics?.correos_pendientes  ?? pending.length,
+    waiting:     threadMetrics?.esperando_cliente   ?? waiting.length,
+    informativo: threadMetrics?.informativos        ?? informativos.length,
     nuevos:      uncategorized?.length ?? '?',
-    solucionado: clientThreads.by_estado?.solucionado ?? '—',
-    archived:    clientThreads.by_estado?.archivado   ?? '—',
+    solucionado: threadMetrics?.solucionados        ?? '—',
+    archived:    threadMetrics?.archivados          ?? '—',
   };
 
   let visibleItems = [];
@@ -979,11 +1035,11 @@ export default function ClientActionList({ clientThreads }) {
       {/* ── Header ── */}
       <div className="ctl-header">
         <div className="ctl-header-badges">
-          {clientThreads.high_severity > 0 && (
-            <span className="ctl-summary-badge ctl-summary-red">⚡ {clientThreads.high_severity} urgentes</span>
+          {(threadMetrics?.correos_urgentes || 0) > 0 && (
+            <span className="ctl-summary-badge ctl-summary-red">⚡ {threadMetrics.correos_urgentes} urgentes</span>
           )}
-          <span className="ctl-summary-badge ctl-summary-blue">{clientThreads.requiring_my_action} requieren acción</span>
-          <span className="ctl-summary-badge ctl-summary-gold">{clientThreads.waiting_client_response} esperando cliente</span>
+          <span className="ctl-summary-badge ctl-summary-blue">{threadMetrics?.correos_accion ?? '—'} requieren acción</span>
+          <span className="ctl-summary-badge ctl-summary-gold">{threadMetrics?.esperando_cliente ?? '—'} esperando cliente</span>
         </div>
         <div className="ctl-header-actions">
           <button
@@ -1031,7 +1087,7 @@ export default function ClientActionList({ clientThreads }) {
         {FILTER_TABS.map(f => (
           <button
             key={f.id}
-            className={`ctl-filter-tab ${activeFilter === f.id ? 'active' : ''} ${f.id === 'urgente' && urgent.length > 0 ? 'has-urgent' : ''}`}
+            className={`ctl-filter-tab ${activeFilter === f.id ? 'active' : ''} ${f.id === 'urgente' && (threadMetrics?.correos_urgentes || 0) > 0 ? 'has-urgent' : ''}`}
             onClick={() => setActiveFilter(f.id)}
           >
             {f.label}

@@ -113,7 +113,7 @@ function ScanStats({ stats, scanType }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ClientThreads() {
+export default function ClientThreads({ threadMetrics }) {
   const [data,     setData]     = useState(null);
   const [loading,  setLoading]  = useState(true);
   const [scanning, setScanning] = useState(false);
@@ -176,11 +176,11 @@ export default function ClientThreads() {
         <div className="ct-header-left">
           {data && (
             <div className="ct-summary">
-              {data.high_severity > 0 && (
-                <span className="ct-badge ct-badge-red">⚡ {data.high_severity} urgentes</span>
+              {(threadMetrics?.correos_urgentes || 0) > 0 && (
+                <span className="ct-badge ct-badge-red">⚡ {threadMetrics.correos_urgentes} urgentes</span>
               )}
-              <span className="ct-badge ct-badge-blue">{data.requiring_my_action} requieren acción</span>
-              <span className="ct-badge ct-badge-gold">{data.waiting_client_response} esperando cliente</span>
+              <span className="ct-badge ct-badge-blue">{threadMetrics?.correos_accion ?? data.requiring_my_action} requieren acción</span>
+              <span className="ct-badge ct-badge-gold">{threadMetrics?.esperando_cliente ?? data.waiting_client_response} esperando cliente</span>
               {data.scanned_at && (
                 <span className="ct-scan-time">
                   Escaneado {new Date(data.scanned_at).toLocaleString('es-CL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
