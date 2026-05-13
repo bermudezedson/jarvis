@@ -1430,6 +1430,328 @@ router.get('/contacts', (req, res) => {
   }
 });
 
+// ─── Agent brain helpers ──────────────────────────────────────────────────────
+
+function buildTicketSummary(thread) {
+  let s = thread.subject || '';
+
+  // Strip leading domain/label brackets: "[toprental.cl]", "[CLICK]"
+  s = s.replace(/^\[.*?\]\s*/g, '').trim();
+
+  // Strip reply/forward prefixes
+  s = s.replace(/^(Re|Fwd|FW|RE|AW):\s*/i, '').trim();
+
+  // Strip inline domain references in parentheses: (toprental.cl)
+  s = s.replace(/\s*\([a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\)/g, '').trim();
+
+  // Strip trailing period
+  s = s.replace(/\.$/, '').trim();
+
+  // Prefix with client name if it's not already in the subject
+  const client = thread.client_name;
+  if (client && !s.toLowerCase().includes(client.toLowerCase())) {
+    s = `[${client}] ${s}`;
+  }
+
+  return s.length > 255 ? s.substring(0, 252) + '...' : s;
+}
+
+// ─── Agent brain ─────────────────────────────────────────────────────────────
+
+router.post('/mail/thread/:threadId/analyze', async (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const force = req.body?.force === true;
+    const { analyzeThread } = require('../skills/agent-brain');
+
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Análisis superó el tiempo límite de 30 segundos')), 30000)
+    );
+    const result = await Promise.race([analyzeThread(threadId, { force }), timeoutPromise]);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    logger.error('Thread analysis failed', { error: err.message });
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/mail/thread/:threadId/analysis', (req, res) => {
+  try {
+    const { threadId } = req.params;
+    const db    = require('../db/database');
+    const sqlDb = db.getDb();
+
+    const thread = sqlDb.prepare('SELECT ai_analysis, ai_analysis_at FROM threads WHERE thread_id = ?').get(threadId);
+    if (!thread) return res.status(404).json({ error: 'Thread no encontrado' });
+
+    const analysis = thread.ai_analysis ? JSON.parse(thread.ai_analysis) : null;
+    const actions  = sqlDb.prepare(
+      'SELECT * FROM proposed_actions WHERE thread_id = ? AND status != ? ORDER BY created_at DESC'
+    ).all(threadId, 'superseded');
+
+    res.json({ analysis, analyzed_at: thread.ai_analysis_at, actions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/agent/pending-actions', (req, res) => {
+  try {
+    const db    = require('../db/database');
+    const sqlDb = db.getDb();
+    const rows  = sqlDb.prepare(`
+      SELECT pa.*, t.subject, t.client_name, t.estado, t.severity
+      FROM proposed_actions pa
+      JOIN threads t ON pa.thread_id = t.thread_id
+      WHERE pa.status = 'pending'
+      ORDER BY pa.created_at DESC
+    `).all();
+    res.json({ actions: rows, total: rows.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/agent/action/:actionId/prepare-ticket', async (req, res) => {
+  try {
+    const { actionId } = req.params;
+    const db    = require('../db/database');
+    const jira  = require('../mcp/jira');
+    const sqlDb = db.getDb();
+
+    const action = sqlDb.prepare('SELECT * FROM proposed_actions WHERE id = ?').get(Number(actionId));
+    if (!action) return res.status(404).json({ error: 'Acción no encontrada' });
+
+    const thread = sqlDb.prepare('SELECT * FROM threads WHERE thread_id = ?').get(action.thread_id);
+    if (!thread) return res.status(404).json({ error: 'Thread no encontrado' });
+
+    const { resolveAssignee, getProjectForClient, extractKeywords } = require('../skills/agent-brain');
+
+    // Resolve assignee
+    const assigneeMember = resolveAssignee(action.assignee);
+
+    // Determine project
+    const projectKey = getProjectForClient(thread.client_name);
+    const projects   = await jira.getAvailableProjects();
+    const project    = projects.find(p => p.key === projectKey) || projects[0];
+
+    // Load ai_analysis resumen for structured description
+    let analysisResumen = '';
+    try {
+      const parsed = thread.ai_analysis ? JSON.parse(thread.ai_analysis) : null;
+      analysisResumen = parsed?.resumen || '';
+    } catch { /* ignore */ }
+
+    const daysSinceActivity = thread.date
+      ? Math.max(0, Math.floor((Date.now() - new Date(thread.date).getTime()) / 86400000))
+      : '?';
+
+    const gmailLink = thread.gmail_link || `https://mail.google.com/mail/u/0/#inbox/${thread.thread_id}`;
+    const description = [
+      `## Problema`,
+      analysisResumen || `Correo de ${thread.client_name || 'cliente'} requiere atención.`,
+      ``,
+      `## Qué se necesita`,
+      action.description,
+      ``,
+      `## Contexto del correo`,
+      `- Cliente: ${thread.client_name || '—'}`,
+      `- Remitente: ${thread.last_from || thread.original_from || '—'}`,
+      `- Asunto: ${thread.subject || '—'}`,
+      `- Días sin respuesta: ${daysSinceActivity}`,
+      `- Severidad Jarvis: ${thread.severity || '—'}`,
+      `- Estado: ${thread.estado || '—'}`,
+      ``,
+      `## Correo original`,
+      gmailLink,
+      ``,
+      `---`,
+      `Ticket creado automáticamente por Jarvis desde análisis de correo.`,
+    ].join('\n');
+
+    // Labels from client jira_label
+    const labels = [];
+    if (thread.client_jira_label) labels.push(thread.client_jira_label);
+    if (action.action_type === 'crear_ticket_jira') labels.push('jarvis-auto');
+
+    // Map priority
+    const priorityMap = { alta: 'High', media: 'Medium', baja: 'Low' };
+    const priority = priorityMap[action.priority] || 'Medium';
+
+    // Search for related tickets + active sprint (both non-blocking)
+    let relatedTickets = [];
+    let activeSprint   = null;
+    try {
+      const [rt, sp] = await Promise.allSettled([
+        (async () => {
+          const keywords = extractKeywords(thread.subject);
+          return keywords ? jira.searchRelatedTickets(keywords, projectKey) : [];
+        })(),
+        jira.getActiveSprintForProject(projectKey),
+      ]);
+      if (rt.status === 'fulfilled') relatedTickets = rt.value;
+      if (sp.status === 'fulfilled') activeSprint   = sp.value;
+    } catch { /* non-blocking */ }
+
+    const alreadyLinked = jira.getLinkedTicket(thread.thread_id);
+
+    // Build summary from thread subject (describes the problem, not the delegation instruction)
+    // Prefer Sonnet's short title (action.description ≤ 80 chars) over the thread subject
+    const isShortTitle = action.description && action.description.length <= 80
+      && !action.description.toLowerCase().startsWith('asignar')
+      && !action.description.toLowerCase().startsWith('delegar')
+      && !action.description.toLowerCase().startsWith('crear ticket');
+    const summary = isShortTitle ? action.description : buildTicketSummary(thread);
+
+    // Build sprint options: active first, then Backlog
+    const sprintOptions = [{ id: null, name: 'Backlog (sin sprint)' }];
+    if (activeSprint) {
+      const start = activeSprint.startDate ? activeSprint.startDate.substring(0, 10) : '';
+      const end   = activeSprint.endDate   ? activeSprint.endDate.substring(0, 10)   : '';
+      sprintOptions.unshift({
+        id:    activeSprint.id,
+        name:  `${activeSprint.name}${start ? ` (${start} → ${end})` : ''}`,
+        state: activeSprint.state,
+      });
+    }
+
+    res.json({
+      preview: {
+        summary,
+        description,
+        project:      { key: project.key, name: project.name },
+        issueType:    'Tarea',
+        priority,
+        assignee:     assigneeMember
+          ? { name: action.assignee, display: assigneeMember.nombre, account_id: assigneeMember.jira_account_id }
+          : null,
+        labels,
+        gmail_link:   gmailLink,
+        timeEstimate: action.time_estimate || '1h',
+        sprint:       activeSprint || null,
+      },
+      options: {
+        assignees: [
+          { name: 'luciano',   display: 'Luciano Alvares',   account_id: '62727c32e01c14006a51fd3d' },
+          { name: 'richard',   display: 'Richard Martinez',  account_id: '627280c8f42962006fdfa043' },
+          { name: 'johana',    display: 'Johana Pailanca',   account_id: null },
+          { name: 'alejandro', display: 'Alejandro Bermúdez', account_id: '6358866a1cc605b1fd162e92' },
+        ],
+        projects,
+        issueTypes: ['Tarea', 'Historia', 'Error'],
+        priorities: ['High', 'Medium', 'Low'],
+        sprints:    sprintOptions,
+      },
+      related_tickets: relatedTickets,
+      already_linked:  alreadyLinked,
+    });
+  } catch (err) {
+    logger.error('Prepare ticket failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/agent/action/:actionId/create-ticket', async (req, res) => {
+  try {
+    const { actionId } = req.params;
+    const { summary, description, projectKey, issueType, priority, assignee, labels, timeEstimate, sprintId } = req.body;
+    if (!summary || !projectKey) return res.status(400).json({ error: 'summary y projectKey son requeridos' });
+
+    const db    = require('../db/database');
+    const jira  = require('../mcp/jira');
+    const sqlDb = db.getDb();
+
+    const action = sqlDb.prepare('SELECT * FROM proposed_actions WHERE id = ?').get(Number(actionId));
+    if (!action) return res.status(404).json({ error: 'Acción no encontrada' });
+
+    // Check not already created
+    const existing = jira.getLinkedTicket(action.thread_id);
+    if (existing) {
+      return res.status(409).json({ error: `Ya existe ticket ${existing.key} para este correo`, ticket: existing });
+    }
+
+    // Resolve assignee account ID
+    const { resolveAssignee } = require('../skills/agent-brain');
+    const member = resolveAssignee(assignee);
+    const assigneeAccountId = member?.jira_account_id || null;
+
+    // Create ticket
+    const ticket = await jira.createTicket({
+      summary,
+      description,
+      projectKey,
+      issueType,
+      priority,
+      assigneeAccountId,
+      labels:       Array.isArray(labels) ? labels : [],
+      timeEstimate: timeEstimate || null,
+      sprintId:     sprintId    || null,
+    });
+
+    // Log in actions_log
+    db.logAction(action.thread_id, 'jira_ticket_created', {
+      key:       ticket.key,
+      url:       ticket.url,
+      project:   projectKey,
+      assignee:  assignee || null,
+      priority,
+      action_id: Number(actionId),
+    });
+
+    // Mark action as executed
+    sqlDb.prepare(`
+      UPDATE proposed_actions
+      SET status = 'executed', resolved_by = 'ceo', resolved_at = datetime('now')
+      WHERE id = ?
+    `).run(Number(actionId));
+
+    // Update thread estado → en_jira
+    sqlDb.prepare(`
+      UPDATE threads
+      SET estado = 'en_jira', jira_issue_key = ?, updated_at = datetime('now')
+      WHERE thread_id = ?
+    `).run(ticket.key, action.thread_id);
+
+    logger.info('Jira ticket created from action', { key: ticket.key, actionId, thread_id: action.thread_id });
+    res.json({ success: true, ticket });
+  } catch (err) {
+    logger.error('Create ticket failed', { error: err.message });
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/agent/action/:actionId/reject', (req, res) => {
+  try {
+    const { actionId } = req.params;
+    const db    = require('../db/database');
+    const sqlDb = db.getDb();
+
+    const action = sqlDb.prepare('SELECT * FROM proposed_actions WHERE id = ?').get(Number(actionId));
+    if (!action) return res.status(404).json({ error: 'Acción no encontrada' });
+
+    sqlDb.prepare(`
+      UPDATE proposed_actions
+      SET status = 'rejected', resolved_by = 'ceo', resolved_at = datetime('now')
+      WHERE id = ?
+    `).run(Number(actionId));
+
+    db.logAction(action.thread_id, 'action_rejected', { action_id: Number(actionId), action_type: action.action_type });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/agent/candidates', (req, res) => {
+  try {
+    const { getAnalysisCandidates } = require('../skills/agent-brain');
+    const candidates = getAnalysisCandidates();
+    res.json({ candidates, total: candidates.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.put('/contacts/:email', (req, res) => {
   try {
     const db = require('../db/database');

@@ -42,7 +42,8 @@ async function main() {
 
   const items = threads?.items || [];
   const active = items.filter(t => t.estado !== 'archivado' && t.estado !== 'solucionado');
-  const actionable = active.filter(t => t.estado !== 'informativo');
+  // en_jira is tracked separately — not counted in accion/urgentes
+  const actionable = active.filter(t => t.estado !== 'informativo' && t.estado !== 'en_jira');
 
   // ─── Urgentes ─────────────────────────────────────────────────────────────
   const urgentFrontend = actionable.filter(t => t.severity === 'high' && !t.last_sender_is_me).length;

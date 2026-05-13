@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import FeedbackModal from './FeedbackModal';
-import RulesPanel    from './RulesPanel';
+import FeedbackModal  from './FeedbackModal';
+import RulesPanel     from './RulesPanel';
+import TicketPreview  from './TicketPreview';
 
 const API   = 'http://localhost:3000/api';
 const GMAIL = id => `https://mail.google.com/mail/u/0/#inbox/${id}`;
@@ -319,24 +320,183 @@ function MoveToDropdown({ t, isInformativo, onTransition }) {
   );
 }
 
+// ─── Agent Brain analysis panel ──────────────────────────────────────────────
+
+const ACTION_TYPE_ICONS = {
+  crear_ticket_jira:   '🎫',
+  responder_correo:    '📧',
+  delegar:             '👤',
+  agendar_reunion:     '📅',
+  marcar_solucionado:  '✅',
+  escalar:             '🔺',
+};
+
+function AnalysisPanel({ analysis, actions, fromCache, analyzedAt, onReanalyze, threadId }) {
+  const [ticketActionId, setTicketActionId] = useState(null);
+  const [createdTickets, setCreatedTickets] = useState({});
+  const [rejectedIds,    setRejectedIds]    = useState(new Set());
+
+  const urgCls = `ai-badge-urgencia-${analysis.urgencia || 'media'}`;
+  const ageStr = analyzedAt
+    ? (() => {
+        const mins = Math.round((Date.now() - new Date(analyzedAt).getTime()) / 60000);
+        if (mins < 1)  return 'ahora mismo';
+        if (mins < 60) return `hace ${mins} min`;
+        return `hace ${Math.round(mins / 60)}h`;
+      })()
+    : null;
+
+  // Build a map: action index → proposed_action id (from DB actions array)
+  const actionIds = {};
+  if (actions?.length) {
+    actions.forEach((a, i) => { if (a.id) actionIds[i] = a.id; });
+  }
+
+  async function handleReject(actionIdx) {
+    const id = actionIds[actionIdx];
+    if (!id) return;
+    try {
+      await fetch(`${API}/agent/action/${id}/reject`, { method: 'POST' });
+      setRejectedIds(prev => new Set([...prev, actionIdx]));
+    } catch { /* silent */ }
+  }
+
+  return (
+    <>
+      <div className="ai-analysis-header">
+        <span className="ai-analysis-title">🤖 Análisis de Jarvis</span>
+        <div className="ai-analysis-meta">
+          {fromCache && ageStr && <span>cache · {ageStr} · </span>}
+          <button
+            style={{ background: 'none', border: 'none', color: '#9c9a92', cursor: 'pointer', fontSize: '10px', padding: 0 }}
+            onClick={onReanalyze}
+            title="Re-analizar (consume tokens)"
+          >
+            🔄 Re-analizar
+          </button>
+        </div>
+      </div>
+
+      <div className="ai-analysis-resumen">{analysis.resumen}</div>
+
+      <div className="ai-analysis-badges">
+        {analysis.urgencia && (
+          <span className={`ai-badge ${urgCls}`}>
+            {analysis.urgencia === 'alta' ? '⚡ ' : ''}urgencia {analysis.urgencia}
+          </span>
+        )}
+        {analysis.tipo && (
+          <span className="ai-badge ai-badge-tipo">{analysis.tipo.replace(/_/g, ' ')}</span>
+        )}
+      </div>
+
+      {analysis.acciones_sugeridas?.length > 0 && (
+        <>
+          <div className="ai-actions-title">Acciones sugeridas</div>
+          {analysis.acciones_sugeridas.map((a, i) => {
+            const isJira     = a.tipo === 'crear_ticket_jira' || a.tipo === 'delegar';
+            const isRejected = rejectedIds.has(i);
+            const ticketDone = createdTickets[i];
+            const actionId   = actionIds[i];
+            const showForm   = ticketActionId === i;
+
+            return (
+              <div key={i} className={`ai-action-item ${isRejected ? 'ai-action-rejected' : ''}`}>
+                <span className="ai-action-num">{ACTION_TYPE_ICONS[a.tipo] || '→'}</span>
+                <div className="ai-action-body">
+                  <div className="ai-action-desc">
+                    {ticketDone
+                      ? <span style={{ color: '#4ade80' }}>
+                          ✅ Ticket <a href={ticketDone.url} target="_blank" rel="noreferrer" className="tp-ticket-link">{ticketDone.key}</a> creado
+                        </span>
+                      : isRejected
+                        ? <span style={{ color: '#6b7280', textDecoration: 'line-through' }}>{a.descripcion}</span>
+                        : a.descripcion
+                    }
+                  </div>
+                  {!ticketDone && !isRejected && (
+                    <div className="ai-action-meta">
+                      {a.asignar_a && a.asignar_a !== 'null' && (
+                        <span className="ai-action-tag assignee">→ {a.asignar_a}</span>
+                      )}
+                      {a.prioridad && (
+                        <span className={`ai-action-tag prioridad-${a.prioridad}`}>{a.prioridad}</span>
+                      )}
+                      <span className="ai-action-tag">{(a.tipo || '').replace(/_/g, ' ')}</span>
+
+                      {isJira && actionId && !showForm && (
+                        <button
+                          className="ai-action-tag ai-action-btn-ticket"
+                          onClick={e => { e.stopPropagation(); setTicketActionId(i); }}
+                          style={{ cursor: 'pointer', background: 'rgba(96,165,250,.12)', color: '#60a5fa', border: '1px solid rgba(96,165,250,.3)', borderRadius: 3, padding: '1px 6px', fontSize: '10px' }}
+                        >
+                          📋 Preparar ticket
+                        </button>
+                      )}
+                      {actionId && (
+                        <button
+                          className="ai-action-tag"
+                          onClick={e => { e.stopPropagation(); handleReject(i); }}
+                          style={{ cursor: 'pointer', background: 'rgba(239,68,68,.08)', color: '#f87171', border: '1px solid rgba(239,68,68,.2)', borderRadius: 3, padding: '1px 6px', fontSize: '10px' }}
+                        >
+                          ❌ Rechazar
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {showForm && actionId && (
+                    <TicketPreview
+                      actionId={actionId}
+                      threadId={threadId}
+                      onCreated={ticket => {
+                        setCreatedTickets(prev => ({ ...prev, [i]: ticket }));
+                        setTicketActionId(null);
+                      }}
+                      onCancel={() => setTicketActionId(null)}
+                    />
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {analysis.contexto_adicional && analysis.contexto_adicional !== 'null' && (
+        <div className="ai-analysis-context">💡 {analysis.contexto_adicional}</div>
+      )}
+
+      {analysis._parse_error && (
+        <div className="ai-parse-error">⚠️ Análisis incompleto — el JSON no pudo parsearse correctamente. Revisar manualmente.</div>
+      )}
+    </>
+  );
+}
+
 // ─── Thread row (expandable accordion) ───────────────────────────────────────
 
 const INITIAL_MESSAGES = 3;
 
 function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, onSilenceDomain, onSilencePattern, jiraStatus, isInformativo = false }) {
-  const [expanded,       setExpanded]       = useState(false);
-  const [messages,       setMessages]       = useState(null);
-  const [loadingMsgs,    setLoadingMsgs]    = useState(false);
-  const [showAll,        setShowAll]        = useState(false);
-  const [replyText,      setReplyText]      = useState('');
-  const [suggestLoading, setSuggestLoading] = useState(false);
-  const [sendLoading,    setSendLoading]    = useState(false);
-  const [replyMode,      setReplyMode]      = useState('reply'); // 'reply' | 'reply_all'
-  const [summary,        setSummary]        = useState(t.ai_summary || null);
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [showWhy,        setShowWhy]        = useState(false);
-  const [whyData,        setWhyData]        = useState(null);
-  const [whyLoading,     setWhyLoading]     = useState(false);
+  const [expanded,        setExpanded]        = useState(false);
+  const [messages,        setMessages]        = useState(null);
+  const [loadingMsgs,     setLoadingMsgs]     = useState(false);
+  const [showAll,         setShowAll]         = useState(false);
+  const [replyText,       setReplyText]       = useState('');
+  const [suggestLoading,  setSuggestLoading]  = useState(false);
+  const [sendLoading,     setSendLoading]     = useState(false);
+  const [replyMode,       setReplyMode]       = useState('reply'); // 'reply' | 'reply_all'
+  const [summary,         setSummary]         = useState(t.ai_summary || null);
+  const [summaryLoading,  setSummaryLoading]  = useState(false);
+  const [showWhy,         setShowWhy]         = useState(false);
+  const [whyData,         setWhyData]         = useState(null);
+  const [whyLoading,      setWhyLoading]      = useState(false);
+  const [analysisData,    setAnalysisData]    = useState(
+    t.ai_analysis ? { analysis: JSON.parse(t.ai_analysis), actions: [], from_cache: true } : null
+  );
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [showAnalysis,    setShowAnalysis]    = useState(false);
 
   // Lazy-generate summary in background on mount
   useEffect(() => {
@@ -579,6 +739,48 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, 
               </button>
             )}
 
+            {/* 🤖 Analizar con Sonnet */}
+            <button
+              className={`ctl-btn ctl-btn-analyze ${showAnalysis ? 'active' : ''}`}
+              title="Analizar con Jarvis (Sonnet)"
+              disabled={analysisLoading}
+              onClick={async e => {
+                e.stopPropagation();
+                // Toggle off if showing
+                if (showAnalysis) { setShowAnalysis(false); return; }
+                // Have analysis but actions not loaded yet → fetch from GET /analysis
+                if (analysisData && !analysisData.actions?.length) {
+                  setShowAnalysis(true);
+                  setAnalysisLoading(true);
+                  try {
+                    const res  = await fetch(`${API}/mail/thread/${t.thread_id}/analysis`);
+                    const data = await res.json();
+                    if (data.analysis) {
+                      setAnalysisData({ analysis: data.analysis, actions: data.actions || [], from_cache: true, analyzed_at: data.analyzed_at });
+                    }
+                  } catch { /* silent */ }
+                  finally { setAnalysisLoading(false); }
+                  return;
+                }
+                // Already have analysis with actions → just show
+                if (analysisData?.actions?.length) { setShowAnalysis(true); return; }
+                // No analysis yet → call Sonnet
+                setAnalysisLoading(true);
+                setShowAnalysis(true);
+                try {
+                  const res  = await fetch(`${API}/mail/thread/${t.thread_id}/analyze`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ force: false }),
+                  });
+                  const data = await res.json();
+                  if (data.success) setAnalysisData(data);
+                } catch { /* silent */ }
+                finally { setAnalysisLoading(false); }
+              }}
+            >
+              {analysisLoading ? '🤖 …' : '🤖 Analizar'}
+            </button>
+
             {/* ¿Por qué? — trazabilidad de clasificación */}
             <button
               className={`ctl-btn ctl-btn-why ${showWhy ? 'active' : ''}`}
@@ -601,6 +803,39 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, 
               {whyLoading ? '…' : '?'}
             </button>
           </div>
+
+          {/* 🤖 AI Analysis panel */}
+          {showAnalysis && (
+            <div className="ai-analysis-panel" onClick={e => e.stopPropagation()}>
+              {analysisLoading && (
+                <div className="ai-analysis-loading">🤖 Jarvis está analizando el hilo completo…</div>
+              )}
+              {!analysisLoading && analysisData?.analysis && (
+                <AnalysisPanel
+                  analysis={analysisData.analysis}
+                  actions={analysisData.actions || []}
+                  fromCache={analysisData.from_cache}
+                  analyzedAt={analysisData.analyzed_at}
+                  threadId={t.thread_id}
+                  onReanalyze={async () => {
+                    setAnalysisLoading(true);
+                    try {
+                      const res  = await fetch(`${API}/mail/thread/${t.thread_id}/analyze`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ force: true }),
+                      });
+                      const data = await res.json();
+                      if (data.success) setAnalysisData(data);
+                    } catch { /* silent */ }
+                    finally { setAnalysisLoading(false); }
+                  }}
+                />
+              )}
+              {!analysisLoading && !analysisData?.analysis && (
+                <div className="ai-parse-error">No hay análisis disponible. Intenta de nuevo.</div>
+              )}
+            </div>
+          )}
 
           {/* ¿Por qué? panel */}
           {showWhy && whyData && (

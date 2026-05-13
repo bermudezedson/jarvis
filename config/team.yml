@@ -1,0 +1,28 @@
+team:
+  luciano:
+    nombre: "Luciano Alvares"
+    email: "lalvares@clickrepuestos.cl"
+    jira_account_id: "62727c32e01c14006a51fd3d"
+    proyectos: ["CLICK"]
+    skills: ["erp", "api", "integraciones", "bugs", "wms", "desarrollo", "panel", "reportes"]
+
+  richard:
+    nombre: "Richard Martinez"
+    email: "richard@webyseo.cl"
+    jira_account_id: "627280c8f42962006fdfa043"
+    proyectos: ["WYS", "CLICK"]
+    skills: ["hosting", "cpanel", "ssl", "dominios", "servidores", "disco", "email", "mercadolibre", "shopify", "walmart", "seo"]
+
+  johana:
+    nombre: "Johana Pailanca"
+    email: "johana@webyseo.cl"
+    jira_account_id: null
+    proyectos: ["CLICK", "WYS"]
+    skills: ["facturacion", "cobranza", "administracion", "pagos", "boleta", "factura"]
+
+  alejandro:
+    nombre: "Alejandro Bermúdez"
+    email: "alejandro@webyseo.cl"
+    jira_account_id: "6358866a1cc605b1fd162e92"
+    proyectos: ["CLICK", "WYS"]
+    skills: ["estrategia", "pricing", "comercial", "cliente", "prospecto", "reunion"]

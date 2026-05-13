@@ -181,10 +181,32 @@ function initTables() {
     `ALTER TABLE threads ADD COLUMN is_new_contact INTEGER DEFAULT 0`,
     `ALTER TABLE threads ADD COLUMN manually_transitioned_at TEXT DEFAULT NULL`,
     `ALTER TABLE threads ADD COLUMN classification_reason TEXT DEFAULT NULL`,
+    `ALTER TABLE threads ADD COLUMN ai_analysis TEXT DEFAULT NULL`,
+    `ALTER TABLE threads ADD COLUMN ai_analysis_at TEXT DEFAULT NULL`,
+    `ALTER TABLE proposed_actions ADD COLUMN time_estimate TEXT DEFAULT NULL`,
   ];
   for (const sql of alterStatements) {
     try { db.exec(sql); } catch { /* column already exists */ }
   }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS proposed_actions (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      thread_id     TEXT NOT NULL,
+      action_type   TEXT NOT NULL,
+      description   TEXT NOT NULL,
+      assignee      TEXT,
+      priority      TEXT DEFAULT 'media',
+      draft_content TEXT,
+      status        TEXT DEFAULT 'pending',
+      created_at    TEXT DEFAULT (datetime('now')),
+      resolved_at   TEXT,
+      resolved_by   TEXT,
+      FOREIGN KEY (thread_id) REFERENCES threads(thread_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_proposed_actions_thread ON proposed_actions(thread_id);
+    CREATE INDEX IF NOT EXISTS idx_proposed_actions_status ON proposed_actions(status);
+  `);
 }
 
 // ─── Thread format helpers ─────────────────────────────────────────────────
@@ -339,8 +361,8 @@ function getClientThreadsSummary(scanStats) {
 
   const items = rows.map(threadToApiFormat);
 
-  // Actionable = not informativo (those are FYI only)
-  const actionable = items.filter(t => t.estado !== 'informativo');
+  // Actionable = not informativo and not en_jira (en_jira is tracked separately)
+  const actionable = items.filter(t => t.estado !== 'informativo' && t.estado !== 'en_jira');
 
   const byEstado = {};
   const byClient = {};
