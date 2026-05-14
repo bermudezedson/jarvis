@@ -7,7 +7,7 @@ import { pushNotification } from '../hooks/useNotifications';
 const API = 'http://localhost:3000/api';
 
 export default function MailPage() {
-  const { clientThreads, threadMetrics, refresh } = useJarvis();
+  const { clientThreads, threadMetrics, refresh, refreshThreads } = useJarvis();
   const [selectedThread,  setSelectedThread]  = useState(null);
   const [localItems,      setLocalItems]      = useState(null);
   const [uncategorized,   setUncategorized]   = useState(null);
@@ -33,6 +33,7 @@ export default function MailPage() {
   const items = localItems || clientThreads?.items || [];
 
   const handleTransition = useCallback(async (thread_id, newEstado, note = '') => {
+    // Optimistic update immediately
     setLocalItems(prev => (prev || items).map(t => {
       if (t.thread_id !== thread_id) return t;
       const updates = { estado: newEstado };
@@ -46,7 +47,9 @@ export default function MailPage() {
         body: JSON.stringify({ estado: newEstado, note }),
       });
     } catch {}
-  }, [items]);
+    // Lightweight refresh so metrics + other pages stay in sync
+    refreshThreads();
+  }, [items, refreshThreads]);
 
   const handleSpam = useCallback((thread_id, data) => {
     setLocalItems(prev => (prev || items).filter(t => t.thread_id !== thread_id));
@@ -58,7 +61,8 @@ export default function MailPage() {
     pushNotification(msg, 'success');
     setSilenceMsg(msg);
     setTimeout(() => setSilenceMsg(null), 4000);
-  }, [items]);
+    refreshThreads();
+  }, [items, refreshThreads]);
 
   const handleFeedback = useCallback(() => {}, []);
 

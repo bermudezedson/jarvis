@@ -20,7 +20,7 @@ function greeting() {
 }
 
 export default function HomePage() {
-  const { threadMetrics, clientThreads } = useJarvis();
+  const { threadMetrics, clientThreads, refreshThreads } = useJarvis();
   const { data: sprintData, loading: sprintLoading } = useSprintData();
   const { alerts, loading: alertsLoading } = useAlerts();
   const navigate = useNavigate();
@@ -39,12 +39,14 @@ export default function HomePage() {
     try {
       await fetch(`${API}/mail/thread/${thread_id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ estado: newEstado, note }) });
     } catch {}
-  }, [items]);
+    refreshThreads();
+  }, [items, refreshThreads]);
 
   const handleSpam = useCallback((thread_id) => {
     setLocalItems(prev => (prev || items).filter(t => t.thread_id !== thread_id));
     setSelectedThread(null);
-  }, [items]);
+    refreshThreads();
+  }, [items, refreshThreads]);
 
   // Metrics
   const urgentes   = threadMetrics?.correos_urgentes  ?? 0;

@@ -58,6 +58,27 @@ export function useJarvisData() {
     await fetchDashboard(viewMode);
   }, [fetchDashboard, viewMode]);
 
+  // Lightweight refresh — only re-fetches thread list + metrics, no Gmail scan
+  const refreshThreads = useCallback(async () => {
+    try {
+      const res  = await fetch(`${API}/mail/client-threads`);
+      const json = await res.json();
+      setDashboardData(prev => prev ? {
+        ...prev,
+        client_threads: json,
+      } : prev);
+
+      const mres  = await fetch(`${API}/dashboard/metrics`);
+      const mjson = await mres.json();
+      setDashboardData(prev => prev ? {
+        ...prev,
+        thread_metrics: mjson,
+      } : prev);
+
+      setLastRefresh(new Date());
+    } catch { /* silent */ }
+  }, []);
+
   return {
     briefing:      dashboardData?.briefing       ?? null,
     clientThreads: dashboardData?.client_threads ?? null,
@@ -71,6 +92,7 @@ export function useJarvisData() {
     viewMode,
     setViewMode,
     refresh,
+    refreshThreads,
     hasRealData: dashboardData?.has_real_data ?? false,
   };
 }
