@@ -347,7 +347,8 @@ export default function MailModal({ thread: t, onClose, onTransition, onSpam, on
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [replyDropdown, setReplyDropdown] = useState(false);
 
-  const bodyRef = useRef(null);
+  const bodyRef    = useRef(null);
+  const msgsEndRef = useRef(null);
 
   // Load messages on mount
   useEffect(() => {
@@ -358,6 +359,13 @@ export default function MailModal({ thread: t, onClose, onTransition, onSpam, on
       .catch(() => setMessages([]))
       .finally(() => setLoadingMsgs(false));
   }, [t.thread_id]);
+
+  // Scroll to the last message once messages load (no need to scroll manually)
+  useEffect(() => {
+    if (messages && messages.length > 0 && msgsEndRef.current) {
+      msgsEndRef.current.scrollIntoView({ behavior: 'instant', block: 'nearest' });
+    }
+  }, [messages]);
 
   // Close on Escape
   useEffect(() => {
@@ -588,6 +596,8 @@ export default function MailModal({ thread: t, onClose, onTransition, onSpam, on
                   </button>
                 )}
                 {visible.map(m => <Bubble key={m.message_id} msg={m} />)}
+                {/* Anchor for auto-scroll to latest message */}
+                <div ref={msgsEndRef} />
               </>
             )}
           </div>

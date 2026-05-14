@@ -634,6 +634,11 @@ router.get('/mail/thread/:threadId/messages', async (req, res) => {
       };
     });
 
+    // Sort chronologically — SQLite ORDER BY date ASC is lexicographic on RFC 2822 strings
+    // which sorts by weekday name (Fri < Thu < Tue < Wed) instead of actual date.
+    // Use JS Date parsing to fix the order correctly.
+    messages.sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+
     res.json({ thread_id: threadId, messages });
   } catch (err) {
     logger.error('Thread messages fetch failed', { error: err.message });
