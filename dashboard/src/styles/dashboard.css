@@ -2104,3 +2104,23 @@ html, body, #root { height: 100%; background: var(--bg); color: var(--text); fon
 .task-client  { font-size: 11px; color: var(--muted); }
 .task-assignee{ font-size: 11px; color: var(--blue); }
 
+
+/* ─── Post-send resolution prompt ───────────────────────────────────────── */
+.post-send-prompt {
+  margin-top: 12px; padding: 16px 18px;
+  background: rgba(34,197,94,.08); border: 1px solid rgba(34,197,94,.25); border-radius: 10px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.post-send-sent     { font-size: 13px; font-weight: 600; color: var(--green); }
+.post-send-question { font-size: 13px; color: var(--text); }
+.post-send-actions  { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.post-send-btn {
+  padding: 7px 16px; border-radius: 6px; font-size: 12px; font-weight: 500;
+  border: 1px solid transparent; cursor: pointer; transition: opacity .15s;
+}
+.post-send-btn:hover    { opacity: .85; }
+.post-send-btn:disabled { opacity: .5; cursor: wait; }
+.post-send-btn--green { background: rgba(34,197,94,.2);  color: var(--green);  border-color: rgba(34,197,94,.4); }
+.post-send-btn--blue  { background: rgba(74,143,217,.2); color: var(--blue);   border-color: rgba(74,143,217,.4); }
+.post-send-btn--gray  { background: rgba(255,255,255,.06); color: var(--muted); border-color: var(--border); }

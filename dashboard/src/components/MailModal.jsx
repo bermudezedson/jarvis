@@ -343,9 +343,11 @@ export default function MailModal({ thread: t, onClose, onTransition, onSpam, on
   const [whyData,       setWhyData]       = useState(null);
   const [whyLoading,    setWhyLoading]    = useState(false);
 
-  const [showSpamConfirm, setShowSpamConfirm] = useState(false);
+  const [showSpamConfirm,   setShowSpamConfirm]   = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
-  const [replyDropdown, setReplyDropdown] = useState(false);
+  const [replyDropdown,     setReplyDropdown]     = useState(false);
+  const [showPostSend,      setShowPostSend]      = useState(false);
+  const [postSendLoading,   setPostSendLoading]   = useState(false);
 
   const bodyRef    = useRef(null);
   const msgsEndRef = useRef(null);
@@ -405,9 +407,31 @@ export default function MailModal({ thread: t, onClose, onTransition, onSpam, on
       });
       setReplyText('');
       setShowReply(false);
-      onClose();
+      setShowPostSend(true);  // Show resolution prompt instead of closing
     } catch {}
     setSendLoading(false);
+  }
+
+  async function handlePostSendAction(action) {
+    setPostSendLoading(true);
+    try {
+      if (action === 'solucionado') {
+        await fetch(`${API}/mail/client-resolve`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ thread_id: t.thread_id, note: 'Resuelto tras enviar respuesta.' }),
+        });
+        if (onTransition) onTransition(t.thread_id, 'solucionado', '');
+      } else if (action === 'esperando_cliente') {
+        await fetch(`${API}/mail/thread/${t.thread_id}/transition`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ estado: 'esperando_cliente', note: '' }),
+        });
+        if (onTransition) onTransition(t.thread_id, 'esperando_cliente', '');
+      }
+      // 'pendiente' — just close, keep current state
+    } catch {}
+    setPostSendLoading(false);
+    onClose();
   }
 
   async function toggleAnalysis() {
@@ -628,8 +652,39 @@ export default function MailModal({ thread: t, onClose, onTransition, onSpam, on
             </div>
           )}
 
+          {/* Post-send resolution prompt */}
+          {showPostSend && (
+            <div className="post-send-prompt">
+              <div className="post-send-sent">✅ Respuesta enviada</div>
+              <div className="post-send-question">¿Cómo queda este hilo?</div>
+              <div className="post-send-actions">
+                <button
+                  className="post-send-btn post-send-btn--green"
+                  onClick={() => handlePostSendAction('solucionado')}
+                  disabled={postSendLoading}
+                >
+                  ✓ Solucionado
+                </button>
+                <button
+                  className="post-send-btn post-send-btn--blue"
+                  onClick={() => handlePostSendAction('esperando_cliente')}
+                  disabled={postSendLoading}
+                >
+                  ⏳ Esperando respuesta
+                </button>
+                <button
+                  className="post-send-btn post-send-btn--gray"
+                  onClick={() => handlePostSendAction('pendiente')}
+                  disabled={postSendLoading}
+                >
+                  Mantener pendiente
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Reply area */}
-          {!isInformativo && (
+          {!isInformativo && !showPostSend && (
             <div className="reply-area" style={{ marginTop: '8px' }}>
               {!showReply ? (
                 <button className="mail-reply-open-btn" onClick={() => openReply('reply')}>
