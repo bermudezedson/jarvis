@@ -1098,6 +1098,30 @@ async function processUniversalScan(threads) {
     `).run(sourceType, aiClassification, isNewContact ? 1 : 0, t.id);
 
     if (!existing) stats.threads_new++;
+
+    // ── Gmail label sync (best-effort, non-blocking) ─────────────────────────
+    // Only for new threads or estado changes (avoids re-hammering Gmail on every scan)
+    const prevEstado = existing?.estado;
+    if (!existing || prevEstado !== estado) {
+      ;(async () => {
+        try {
+          const gmail = require('../mcp/gmail');
+          if (isInformativo) {
+            await gmail.modifyThread(t.id, ['Jarvis/Procesado'], [], true);
+          } else if (client) {
+            const labels = ['Jarvis/Procesado', 'Jarvis/Cliente'];
+            if (estado === 'requiere_mi_accion' || estado === 'esperando_nosotros') {
+              labels.push('Jarvis/Acción Requerida');
+            }
+            await gmail.modifyThread(t.id, labels, [], false);
+          } else if (sourceType === 'provider') {
+            await gmail.modifyThread(t.id, ['Jarvis/Procesado', 'Jarvis/Proveedor'], [], true);
+          } else {
+            await gmail.modifyThread(t.id, ['Jarvis/Procesado'], [], false);
+          }
+        } catch (_) { /* best-effort */ }
+      })();
+    }
   }
 
   db.setLastScan();

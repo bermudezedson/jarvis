@@ -248,6 +248,7 @@ REGLAS PARA acciones_sugeridas:
   - MALOS: "Asignar a Richard para que revise...", "Crear ticket para agregar...", "Delegar a Luciano el desarrollo de..."
 - Para tipo "responder_correo": "descripcion" explica qué responder y cómo.
 - Para tipo "escalar" o "agendar_reunion": "descripcion" explica el objetivo.
+- Para tipo "marcar_spam": el correo es spam, prospección no solicitada, phishing o masivo sin relación con WebySEO/ClickRepuestos. En "contexto_adicional" incluir el dominio del remitente. No asignar a nadie.
 - tiempo_estimado (solo en crear_ticket_jira y delegar): "30m" limpiar disco/config, "1h" bug simple/fix puntual, "2h" feature pequeña/ajuste UI, "4h" feature mediana/integración, "1d" módulo nuevo/feature grande.
 
 {
@@ -256,7 +257,7 @@ REGLAS PARA acciones_sugeridas:
   "tipo": "soporte|feature_request|cobranza|consulta|reclamo|otro",
   "acciones_sugeridas": [
     {
-      "tipo": "crear_ticket_jira|responder_correo|delegar|agendar_reunion|marcar_solucionado|escalar",
+      "tipo": "crear_ticket_jira|responder_correo|delegar|agendar_reunion|marcar_solucionado|escalar|marcar_spam",
       "descripcion": "Título del ticket (max 80 chars) o descripción de la acción",
       "asignar_a": "luciano|richard|johana|alejandro|null",
       "prioridad": "alta|media|baja",

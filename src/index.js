@@ -67,8 +67,16 @@ cron.schedule(refreshStatesCron, async () => {
   }
 }, { timezone: rules.timezone });
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   logger.info('Jarvis API started', { port: PORT, env: process.env.NODE_ENV || 'development' });
+
+  // Ensure Jarvis/* labels exist in Gmail (best-effort, non-blocking)
+  try {
+    const gmail = require('./mcp/gmail');
+    await gmail.ensureJarvisLabels();
+  } catch (e) {
+    logger.warn('Could not initialize Gmail labels', { error: e.message });
+  }
   logger.info('Cron jobs scheduled', {
     morning: rules.briefing.morning_cron,
     evening: rules.briefing.evening_cron,

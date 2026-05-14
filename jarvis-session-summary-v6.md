@@ -1,6 +1,6 @@
 # Jarvis CEO Cockpit — Resumen de sesión completo (v6)
 
-## Documento de continuidad — actualizado 14 mayo 2026, 03:00 Chile
+## Documento de continuidad — actualizado 14 mayo 2026, 23:00 Chile
 
 **Este documento describe cómo funciona Jarvis HOY y hacia dónde va. No es un historial de cambios.**
 
@@ -27,7 +27,7 @@ Alejandro Bermúdez Alcaino, CEO/CTO y fundador de:
 
 Agente de productividad personal (herramienta interna, NO producto) construido con Claude Code. Cockpit de CEO para gestionar correos, tareas Jira, compromisos y agenda desde un dashboard local.
 
-**Estado actual:** Agente con análisis inteligente de correos y creación de tickets Jira. Las 5 capas de reglas filtran el 90% de los correos sin IA. Haiku clasifica el 10% restante de correos desconocidos. **Sonnet analiza los correos que requieren acción**: lee el hilo completo, propone acciones (crear ticket, responder, delegar, escalar), y el CEO aprueba con un click. Los tickets se crean directamente en Jira con formulario editable (asignado, prioridad, sprint, tiempo estimado).
+**Estado actual:** Agente con análisis inteligente de correos, creación de tickets Jira, y **sincronización bidireccional con Gmail**. Las 5 capas de reglas filtran el 90% de los correos sin IA. Haiku clasifica el 10% restante de correos desconocidos. Sonnet analiza los correos que requieren acción y puede detectar spam. Los correos procesados reciben labels automáticos en Gmail (Jarvis/Cliente, Jarvis/Procesado, Jarvis/Acción Requerida, etc.). El CEO puede marcar spam desde el dashboard con un click — archiva en Jarvis, mueve a spam en Gmail, y opcionalmente bloquea el dominio para siempre.
 
 **Próximo paso:** Borradores de respuesta inteligentes (Prompt #19) y panel unificado de acciones (Prompt #20).
 
@@ -378,6 +378,14 @@ scan_log            — Registro de cada scan (tipo, threads encontrados/descart
 - `POST /api/mail/thread/:id/transition` — Mover entre estados (protegido 24h contra refresh)
 - `POST /api/mail/auto-rules` — Ejecutar reglas automáticas
 
+### UX mejorado (Prompt #18d)
+- **Action bar sticky:** El bloque de botones ahora está al TOP del acordeón (no al fondo). `position: sticky, top: 0`. Ya no desaparece del viewport.
+- **Mensajes con scroll:** `max-height: 320px; overflow-y: auto` en `.thread-messages`. Los correos largos no empujan todo hacia abajo.
+- **Textarea colapsable:** El área de respuesta empieza colapsada (solo botón "📝 Responder"). Se expande al hacer click. Incluye botón "✕ Cancelar" para volver a colapsar.
+- **AnalysisPanel colapsable:** Muestra resumen en 1 línea con toggle ▶/▼. Expande todo el panel al hacer click.
+- **Botón 🚫 Spam en action-bar:** Siempre visible, sin necesidad de análisis. Confirma con inline buttons: "Solo spam" | "+ Bloquear dominio" | ✕.
+- **Botones en AnalysisPanel para tipo `marcar_spam`:** "🚫 Marcar spam" y "🔇 Spam + bloquear dominio" cuando Sonnet propone esta acción.
+
 ### Agente — Análisis y acciones (NUEVO)
 - `POST /api/mail/thread/:id/analyze` — Ejecutar análisis de Sonnet para un thread
 - `GET /api/mail/thread/:id/analysis` — Obtener análisis y acciones propuestas
@@ -386,6 +394,34 @@ scan_log            — Registro de cada scan (tipo, threads encontrados/descart
 - `POST /api/agent/action/:id/prepare-ticket` — Preview editable del ticket Jira
 - `POST /api/agent/action/:id/create-ticket` — Crear ticket en Jira real
 - `POST /api/agent/action/:id/reject` — Rechazar una acción propuesta
+
+### Spam y sincronización Gmail (NUEVO — Prompt #18d)
+- `POST /api/mail/thread/:id/mark-spam` — Marcar como spam: archiva en SQLite, mueve a SPAM en Gmail, opcionalmente bloquea dominio en rules.yml. Body: `{ blockDomain: boolean }`
+
+**Labels de Gmail (creados automáticamente al arrancar el servidor):**
+- `Jarvis/Procesado` — Todo lo que Jarvis procesó
+- `Jarvis/Cliente` — Correos de clientes conocidos
+- `Jarvis/Proveedor` — Correos de proveedores
+- `Jarvis/Spam` — Spam detectado por Jarvis
+- `Jarvis/Acción Requerida` — Requiere respuesta del CEO
+- `Jarvis/En Jira` — Tiene ticket en Jira
+- `Jarvis/Solucionado` — Resuelto
+
+**Funciones en `src/mcp/gmail.js`:**
+- `ensureJarvisLabels()` — Crea/verifica labels al arrancar. Cachea IDs en `_labelCache`.
+- `modifyThread(threadId, addLabels, removeLabels, markRead)` — Aplica/quita labels custom vía `/threads/{id}/modify`
+- `archiveGmailThread(threadId)` — Quita INBOX, agrega Jarvis/Solucionado
+- `markThreadAsSpam(threadId)` — Agrega SPAM + Jarvis/Spam, quita INBOX + UNREAD
+
+**Sincronización automática:**
+- **Universal scan:** labels aplicados a cada thread nuevo/cambiado de forma fire-and-forget
+- **Transiciones manuales** (solucionado, archivado): sync Gmail en el endpoint de transition
+- **Crear ticket Jira:** agrega `Jarvis/En Jira`
+- **Marcar spam:** llama `markThreadAsSpam()`
+
+**Script de sincronización retroactiva:** `node scripts/sync-gmail-labels.js` (ejecutar UNA VEZ para los threads existentes)
+
+**IMPORTANTE sobre scopes OAuth2:** El refresh token debe tener `gmail.modify` (no solo `gmail.readonly`). Si los labels no aparecen, verificar los scopes de la app OAuth en Google Cloud Console. La función `request()` en gmail.js ahora lanza errores HTTP 4xx — antes los silenciaba.
 
 ### Reglas y feedback
 - `GET /api/mail/rules-full` — Todas las reglas consolidadas con origen enriquecido
@@ -522,8 +558,9 @@ Correo llega → 5 capas de reglas (gratis, 90% resuelto aquí)
 | 18 | Jira bidireccional (REST API directa, createTicket, searchRelated, TicketPreview.jsx) | ✅ | 2 |
 | 18b | Correcciones tickets (títulos descriptivos, descripción estructurada, tiempo estimado) | ✅ | 2 |
 | 18c | Sprint activo (moveToSprint post-creación, dropdown sprint en formulario) | ✅ | 2 |
-| 19 | Borradores de respuesta inteligentes | 🔜 | 3 |
-| 20 | Panel de acciones propuestas en React | 🔜 | 3 |
+| 18d | Spam desde Jarvis, labels Gmail, UX mejorado (action-bar sticky, scroll msgs, textarea colapsable) | ✅ | 3 |
+| 19 | Borradores de respuesta inteligentes | 🔜 | 4 |
+| 20 | Panel de acciones propuestas en React | 🔜 | 4 |
 
 ---
 

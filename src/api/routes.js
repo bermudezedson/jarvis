@@ -455,6 +455,72 @@ router.post('/mail/silence-pattern', (req, res) => {
   }
 });
 
+// ─── Marcar spam ─────────────────────────────────────────────────────────────
+
+router.post('/mail/thread/:threadId/mark-spam', async (req, res) => {
+  try {
+    const { threadId }            = req.params;
+    const { blockDomain = false } = req.body;
+
+    const db    = require('../db/database');
+    const sqlDb = db.getDb();
+
+    const thread = sqlDb.prepare('SELECT * FROM threads WHERE thread_id = ?').get(threadId);
+    if (!thread) return res.status(404).json({ error: 'Thread no encontrado' });
+
+    // 1. Archive in SQLite
+    sqlDb.prepare(`
+      UPDATE threads
+      SET estado = 'archivado', archived_at = datetime('now'), updated_at = datetime('now')
+      WHERE thread_id = ?
+    `).run(threadId);
+
+    // 2. Mark pending proposed_actions as executed
+    sqlDb.prepare(`
+      UPDATE proposed_actions
+      SET status = 'executed', resolved_at = datetime('now'), resolved_by = 'spam'
+      WHERE thread_id = ? AND status = 'pending'
+    `).run(threadId);
+
+    // 3. Gmail spam (best-effort)
+    let gmailResult = { success: false };
+    try {
+      const gmail = require('../mcp/gmail');
+      gmailResult = await gmail.markThreadAsSpam(threadId);
+    } catch (e) {
+      logger.warn('Gmail spam mark failed (non-fatal)', { threadId, error: e.message });
+    }
+
+    // 4. Block domain if requested
+    let domainBlocked = false;
+    let domain        = null;
+    if (blockDomain) {
+      const email  = thread.last_from_email || thread.from || '';
+      const match  = email.match(/@([\w.-]+)/);
+      if (match) {
+        domain = match[1].toLowerCase();
+        const rulesPath = path.join(__dirname, '../../config/rules.yml');
+        const rulesDoc  = yaml.load(fs.readFileSync(rulesPath, 'utf8'));
+        if (!rulesDoc.mail.spam_domains.includes(domain)) {
+          rulesDoc.mail.spam_domains.push(domain);
+          fs.writeFileSync(rulesPath, yaml.dump(rulesDoc, { lineWidth: 120 }), 'utf8');
+          domainBlocked = true;
+          logger.info('Domain blacklisted via spam', { domain });
+        }
+      }
+    }
+
+    // 5. Log action
+    db.logAction(threadId, 'marked_spam', { domain, domainBlocked, blockDomain, gmailResult });
+
+    logger.info('Thread marked as spam', { threadId, domain, domainBlocked });
+    res.json({ success: true, thread_id: threadId, domainBlocked, domain, gmailResult });
+  } catch (err) {
+    logger.error('Mark spam failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/mail/client-archive', (req, res) => {
   try {
     const { thread_id, reason = '' } = req.body;
@@ -465,6 +531,10 @@ router.post('/mail/client-archive', (req, res) => {
     // Regenerate JSON cache asynchronously
     const mailOps = require('../skills/mail-ops');
     mailOps.classifyClientThreads({ mode: 'refresh_states' }).catch(() => {});
+    // Gmail sync (best-effort)
+    ;(async () => {
+      try { await require('../mcp/gmail').archiveGmailThread(thread_id); } catch (_) {}
+    })();
     logger.info('Client thread archived', { thread_id });
     res.json({ success: true, ...result });
   } catch (err) {
@@ -481,6 +551,13 @@ router.post('/mail/client-resolve', (req, res) => {
     if (!result) return res.status(404).json({ error: 'Thread not found' });
     const mailOps = require('../skills/mail-ops');
     mailOps.classifyClientThreads({ mode: 'refresh_states' }).catch(() => {});
+    // Gmail sync: add Solucionado label, mark read (best-effort)
+    ;(async () => {
+      try {
+        const gmail = require('../mcp/gmail');
+        await gmail.modifyThread(thread_id, ['Jarvis/Solucionado'], ['Jarvis/Acción Requerida'], true);
+      } catch (_) {}
+    })();
     logger.info('Client thread resolved', { thread_id, resolution_hours: result.resolution_time_hours });
     res.json({ success: true, ...result });
   } catch (err) {
@@ -1343,6 +1420,19 @@ router.post('/mail/thread/:threadId/transition', (req, res) => {
     const sm = require('../skills/state-machine');
     const result = sm.transition(threadId, estado, note || '');
     if (result.error) return res.status(400).json(result);
+    // Gmail sync (fire-and-forget)
+    ;(async () => {
+      try {
+        const gmail = require('../mcp/gmail');
+        if (estado === 'solucionado') {
+          await gmail.modifyThread(threadId, ['Jarvis/Solucionado'], ['Jarvis/Acción Requerida'], true);
+        } else if (estado === 'archivado') {
+          await gmail.archiveGmailThread(threadId);
+        } else if (estado === 'requiere_mi_accion' || estado === 'esperando_nosotros') {
+          await gmail.modifyThread(threadId, ['Jarvis/Acción Requerida'], ['Jarvis/Solucionado'], false);
+        }
+      } catch (_) {}
+    })();
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1711,6 +1801,14 @@ router.post('/agent/action/:actionId/create-ticket', async (req, res) => {
       SET estado = 'en_jira', jira_issue_key = ?, updated_at = datetime('now')
       WHERE thread_id = ?
     `).run(ticket.key, action.thread_id);
+
+    // Gmail sync: add En Jira label (fire-and-forget)
+    ;(async () => {
+      try {
+        const gmail = require('../mcp/gmail');
+        await gmail.modifyThread(action.thread_id, ['Jarvis/En Jira'], ['Jarvis/Acción Requerida'], false);
+      } catch (_) {}
+    })();
 
     logger.info('Jira ticket created from action', { key: ticket.key, actionId, thread_id: action.thread_id });
     res.json({ success: true, ticket });

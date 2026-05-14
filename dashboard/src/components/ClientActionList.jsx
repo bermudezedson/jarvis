@@ -329,12 +329,14 @@ const ACTION_TYPE_ICONS = {
   agendar_reunion:     '📅',
   marcar_solucionado:  '✅',
   escalar:             '🔺',
+  marcar_spam:         '🚫',
 };
 
-function AnalysisPanel({ analysis, actions, fromCache, analyzedAt, onReanalyze, threadId }) {
+function AnalysisPanel({ analysis, actions, fromCache, analyzedAt, onReanalyze, threadId, thread, onSpammed }) {
   const [ticketActionId, setTicketActionId] = useState(null);
   const [createdTickets, setCreatedTickets] = useState({});
   const [rejectedIds,    setRejectedIds]    = useState(new Set());
+  const [spamDoneIds,    setSpamDoneIds]    = useState(new Set());
 
   const urgCls = `ai-badge-urgencia-${analysis.urgencia || 'media'}`;
   const ageStr = analyzedAt
@@ -358,6 +360,22 @@ function AnalysisPanel({ analysis, actions, fromCache, analyzedAt, onReanalyze, 
     try {
       await fetch(`${API}/agent/action/${id}/reject`, { method: 'POST' });
       setRejectedIds(prev => new Set([...prev, actionIdx]));
+    } catch { /* silent */ }
+  }
+
+  async function executeMarkSpam(actionIdx, blockDomain) {
+    const threadIdToUse = threadId;
+    try {
+      const res  = await fetch(`${API}/mail/thread/${threadIdToUse}/mark-spam`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ blockDomain }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSpamDoneIds(prev => new Set([...prev, actionIdx]));
+        if (onSpammed) onSpammed(data);
+      }
     } catch { /* silent */ }
   }
 
@@ -395,7 +413,9 @@ function AnalysisPanel({ analysis, actions, fromCache, analyzedAt, onReanalyze, 
           <div className="ai-actions-title">Acciones sugeridas</div>
           {analysis.acciones_sugeridas.map((a, i) => {
             const isJira     = a.tipo === 'crear_ticket_jira' || a.tipo === 'delegar';
+            const isSpam     = a.tipo === 'marcar_spam';
             const isRejected = rejectedIds.has(i);
+            const isSpamDone = spamDoneIds.has(i);
             const ticketDone = createdTickets[i];
             const actionId   = actionIds[i];
             const showForm   = ticketActionId === i;
@@ -409,12 +429,14 @@ function AnalysisPanel({ analysis, actions, fromCache, analyzedAt, onReanalyze, 
                       ? <span style={{ color: '#4ade80' }}>
                           ✅ Ticket <a href={ticketDone.url} target="_blank" rel="noreferrer" className="tp-ticket-link">{ticketDone.key}</a> creado
                         </span>
+                      : isSpamDone
+                        ? <span style={{ color: '#4ade80' }}>✅ Marcado como spam en Jarvis y Gmail</span>
                       : isRejected
                         ? <span style={{ color: '#6b7280', textDecoration: 'line-through' }}>{a.descripcion}</span>
                         : a.descripcion
                     }
                   </div>
-                  {!ticketDone && !isRejected && (
+                  {!ticketDone && !isRejected && !isSpamDone && (
                     <div className="ai-action-meta">
                       {a.asignar_a && a.asignar_a !== 'null' && (
                         <span className="ai-action-tag assignee">→ {a.asignar_a}</span>
@@ -433,6 +455,26 @@ function AnalysisPanel({ analysis, actions, fromCache, analyzedAt, onReanalyze, 
                           📋 Preparar ticket
                         </button>
                       )}
+
+                      {isSpam && (
+                        <>
+                          <button
+                            className="ai-action-tag"
+                            onClick={e => { e.stopPropagation(); executeMarkSpam(i, false); }}
+                            style={{ cursor: 'pointer', background: 'rgba(239,68,68,.12)', color: '#f87171', border: '1px solid rgba(239,68,68,.3)', borderRadius: 3, padding: '1px 6px', fontSize: '10px' }}
+                          >
+                            🚫 Marcar spam
+                          </button>
+                          <button
+                            className="ai-action-tag"
+                            onClick={e => { e.stopPropagation(); executeMarkSpam(i, true); }}
+                            style={{ cursor: 'pointer', background: 'rgba(239,68,68,.08)', color: '#fb923c', border: '1px solid rgba(239,68,68,.2)', borderRadius: 3, padding: '1px 6px', fontSize: '10px' }}
+                          >
+                            🔇 Spam + bloquear dominio
+                          </button>
+                        </>
+                      )}
+
                       {actionId && (
                         <button
                           className="ai-action-tag"
@@ -478,15 +520,62 @@ function AnalysisPanel({ analysis, actions, fromCache, analyzedAt, onReanalyze, 
 
 const INITIAL_MESSAGES = 3;
 
-function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, onSilenceDomain, onSilencePattern, jiraStatus, isInformativo = false }) {
+// ─── Spam button ──────────────────────────────────────────────────────────────
+
+function SpamButton({ thread, onSpammed }) {
+  const [confirming, setConfirming] = useState(false);
+  const [loading,    setLoading]    = useState(false);
+  const domain = (thread.last_from_email || '').split('@')[1] || '?';
+
+  async function markSpam(blockDomain) {
+    setLoading(true);
+    try {
+      const res  = await fetch(`${API}/mail/thread/${thread.thread_id}/mark-spam`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ blockDomain }),
+      });
+      const data = await res.json();
+      if (data.success && onSpammed) onSpammed(data);
+    } catch { /* silent */ }
+    setLoading(false);
+    setConfirming(false);
+  }
+
+  if (confirming) {
+    return (
+      <div className="spam-confirm" onClick={e => e.stopPropagation()} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: '11px', color: '#9c9a92' }}>¿Spam de {domain}?</span>
+        <button className="ctl-btn" onClick={() => markSpam(false)} disabled={loading} style={{ fontSize: '10px', padding: '2px 6px' }}>Solo spam</button>
+        <button className="ctl-btn ctl-btn-silence" onClick={() => markSpam(true)} disabled={loading} style={{ fontSize: '10px', padding: '2px 6px' }}>+ Bloquear dominio</button>
+        <button className="ctl-btn" onClick={() => setConfirming(false)} style={{ fontSize: '10px', padding: '2px 6px' }}>✕</button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      className="ctl-btn"
+      title={`Marcar como spam · dominio: ${domain}`}
+      onClick={e => { e.stopPropagation(); setConfirming(true); }}
+      style={{ fontSize: '11px' }}
+    >
+      🚫 Spam
+    </button>
+  );
+}
+
+function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, onSilenceDomain, onSilencePattern, onSpam, jiraStatus, isInformativo = false }) {
   const [expanded,        setExpanded]        = useState(false);
   const [messages,        setMessages]        = useState(null);
   const [loadingMsgs,     setLoadingMsgs]     = useState(false);
   const [showAll,         setShowAll]         = useState(false);
+  const [showReply,       setShowReply]       = useState(false);
   const [replyText,       setReplyText]       = useState('');
   const [suggestLoading,  setSuggestLoading]  = useState(false);
   const [sendLoading,     setSendLoading]     = useState(false);
   const [replyMode,       setReplyMode]       = useState('reply'); // 'reply' | 'reply_all'
+  const [analysisCollapsed, setAnalysisCollapsed] = useState(false);
   const [summary,         setSummary]         = useState(t.ai_summary || null);
   const [summaryLoading,  setSummaryLoading]  = useState(false);
   const [showWhy,         setShowWhy]         = useState(false);
@@ -620,82 +709,9 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, 
       {/* ── Accordion body ── */}
       {expanded && (
         <div className="ctl-accordion">
-          {/* Messages */}
-          <div className="thread-messages">
-            {loadingMsgs && <div className="thread-loading">Cargando conversación...</div>}
-            {!loadingMsgs && messages?.length === 0 && (
-              <div className="thread-loading">Sin mensajes cargados.</div>
-            )}
-            {messages && (() => {
-              const hiddenCount = messages.length - INITIAL_MESSAGES;
-              const visible = showAll ? messages : messages.slice(-INITIAL_MESSAGES);
-              return (
-                <>
-                  {hiddenCount > 0 && !showAll && (
-                    <button className="show-more-btn" onClick={() => setShowAll(true)}>
-                      Ver {hiddenCount} mensaje{hiddenCount > 1 ? 's' : ''} anterior{hiddenCount > 1 ? 'es' : ''}
-                    </button>
-                  )}
-                  {visible.map(m => <MessageBubble key={m.message_id} message={m} />)}
-                </>
-              );
-            })()}
-          </div>
 
-          {/* Snippet fallback if no messages loaded */}
-          {!loadingMsgs && !messages?.length && t.snippet && (
-            <div className="thread-snippet-fallback">"{t.snippet}"</div>
-          )}
-
-          {/* Reply area — hidden for informativos */}
-          {!isInformativo && (
-            <div className="reply-area">
-              {showReplyAll && (
-                <div className="reply-mode-toggle">
-                  <button className={`reply-mode-btn ${replyMode === 'reply' ? 'active' : ''}`}
-                    onClick={() => setReplyMode('reply')}>
-                    Responder
-                  </button>
-                  <button className={`reply-mode-btn ${replyMode === 'reply_all' ? 'active' : ''}`}
-                    onClick={() => setReplyMode('reply_all')}>
-                    Responder a todos ({replyAllContacts.length})
-                  </button>
-                </div>
-              )}
-              <div className="reply-to-info">
-                <span className="reply-to-label">Para: </span>
-                <strong className="reply-to-email">{replyTo.to}</strong>
-                {replyTo.name && replyTo.name !== replyTo.to && (
-                  <span className="reply-to-name"> ({replyTo.name})</span>
-                )}
-                {replyMode === 'reply_all' && ccRecipients && (
-                  <span className="reply-cc-list"><br/>CC: {ccRecipients}</span>
-                )}
-                <span className="reply-to-subject"> · {replyTo.subject}</span>
-              </div>
-              <textarea
-                className="reply-input"
-                placeholder="Escribe tu respuesta..."
-                value={replyText}
-                onChange={e => setReplyText(e.target.value)}
-                rows={4}
-              />
-              <div className="reply-actions">
-                <button className="ctl-btn ctl-btn-suggest" onClick={suggestReply} disabled={suggestLoading}>
-                  {suggestLoading ? '✦ Generando...' : '✦ Jarvis'}
-                </button>
-                <button className="ctl-btn ctl-btn-send" onClick={sendReply} disabled={sendLoading || !replyText.trim()}>
-                  {sendLoading ? 'Enviando...' : 'Enviar'}
-                </button>
-                <a href={GMAIL(t.thread_id)} target="_blank" rel="noreferrer" className="ctl-btn ctl-btn-reply">
-                  Gmail ↗
-                </a>
-              </div>
-            </div>
-          )}
-
-          {/* Action bar */}
-          <div className="action-bar">
+          {/* Action bar — STICKY TOP so it's always visible */}
+          <div className="action-bar" style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-surface, #1e1e1e)', paddingBottom: '6px', borderBottom: '1px solid rgba(255,255,255,0.06)', marginBottom: '8px' }}>
             {/* Jira — non-informativo only */}
             {!isInformativo && (
               jiraStatus === 'done'
@@ -716,11 +732,19 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, 
               </a>
             )}
 
-            {/* "Mover a" dropdown — replaces separate Solucionado / Archivar */}
+            {/* "Mover a" dropdown */}
             <MoveToDropdown
               t={t}
               isInformativo={isInformativo}
               onTransition={(newEstado, note) => onTransition(t.thread_id, newEstado, note)}
+            />
+
+            {/* 🚫 Spam */}
+            <SpamButton
+              thread={t}
+              onSpammed={data => {
+                if (onSpam) onSpam(t.thread_id, data);
+              }}
             />
 
             {/* Corregir / Feedback */}
@@ -746,9 +770,7 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, 
               disabled={analysisLoading}
               onClick={async e => {
                 e.stopPropagation();
-                // Toggle off if showing
                 if (showAnalysis) { setShowAnalysis(false); return; }
-                // Have analysis but actions not loaded yet → fetch from GET /analysis
                 if (analysisData && !analysisData.actions?.length) {
                   setShowAnalysis(true);
                   setAnalysisLoading(true);
@@ -762,9 +784,7 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, 
                   finally { setAnalysisLoading(false); }
                   return;
                 }
-                // Already have analysis with actions → just show
                 if (analysisData?.actions?.length) { setShowAnalysis(true); return; }
-                // No analysis yet → call Sonnet
                 setAnalysisLoading(true);
                 setShowAnalysis(true);
                 try {
@@ -804,35 +824,148 @@ function ThreadRow({ t, onArchive, onResolve, onJira, onFeedback, onTransition, 
             </button>
           </div>
 
-          {/* 🤖 AI Analysis panel */}
+          {/* 🤖 AI Analysis panel — colapsable */}
           {showAnalysis && (
             <div className="ai-analysis-panel" onClick={e => e.stopPropagation()}>
               {analysisLoading && (
                 <div className="ai-analysis-loading">🤖 Jarvis está analizando el hilo completo…</div>
               )}
               {!analysisLoading && analysisData?.analysis && (
-                <AnalysisPanel
-                  analysis={analysisData.analysis}
-                  actions={analysisData.actions || []}
-                  fromCache={analysisData.from_cache}
-                  analyzedAt={analysisData.analyzed_at}
-                  threadId={t.thread_id}
-                  onReanalyze={async () => {
-                    setAnalysisLoading(true);
-                    try {
-                      const res  = await fetch(`${API}/mail/thread/${t.thread_id}/analyze`, {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ force: true }),
-                      });
-                      const data = await res.json();
-                      if (data.success) setAnalysisData(data);
-                    } catch { /* silent */ }
-                    finally { setAnalysisLoading(false); }
-                  }}
-                />
+                <>
+                  {/* Collapsible header */}
+                  <div
+                    className="ai-analysis-collapse-header"
+                    style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: analysisCollapsed ? 0 : '6px' }}
+                    onClick={() => setAnalysisCollapsed(v => !v)}
+                  >
+                    <span style={{ fontSize: '10px', color: '#6b7280' }}>{analysisCollapsed ? '▶' : '▼'}</span>
+                    <span className="ai-analysis-title" style={{ margin: 0 }}>🤖 Análisis de Jarvis</span>
+                    <span className="ai-analysis-resumen" style={{ margin: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {analysisData.analysis.resumen}
+                    </span>
+                  </div>
+                  {!analysisCollapsed && (
+                    <AnalysisPanel
+                      analysis={analysisData.analysis}
+                      actions={analysisData.actions || []}
+                      fromCache={analysisData.from_cache}
+                      analyzedAt={analysisData.analyzed_at}
+                      threadId={t.thread_id}
+                      thread={t}
+                      onSpammed={data => { if (onSpam) onSpam(t.thread_id, data); }}
+                      onReanalyze={async () => {
+                        setAnalysisLoading(true);
+                        try {
+                          const res  = await fetch(`${API}/mail/thread/${t.thread_id}/analyze`, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ force: true }),
+                          });
+                          const data = await res.json();
+                          if (data.success) setAnalysisData(data);
+                        } catch { /* silent */ }
+                        finally { setAnalysisLoading(false); }
+                      }}
+                    />
+                  )}
+                </>
               )}
               {!analysisLoading && !analysisData?.analysis && (
                 <div className="ai-parse-error">No hay análisis disponible. Intenta de nuevo.</div>
+              )}
+            </div>
+          )}
+
+          {/* Messages — max height with scroll */}
+          <div className="thread-messages" style={{ maxHeight: '320px', overflowY: 'auto' }}>
+            {loadingMsgs && <div className="thread-loading">Cargando conversación...</div>}
+            {!loadingMsgs && messages?.length === 0 && (
+              <div className="thread-loading">Sin mensajes cargados.</div>
+            )}
+            {messages && (() => {
+              const hiddenCount = messages.length - INITIAL_MESSAGES;
+              const visible = showAll ? messages : messages.slice(-INITIAL_MESSAGES);
+              return (
+                <>
+                  {hiddenCount > 0 && !showAll && (
+                    <button className="show-more-btn" onClick={() => setShowAll(true)}>
+                      Ver {hiddenCount} mensaje{hiddenCount > 1 ? 's' : ''} anterior{hiddenCount > 1 ? 'es' : ''}
+                    </button>
+                  )}
+                  {visible.map(m => <MessageBubble key={m.message_id} message={m} />)}
+                </>
+              );
+            })()}
+          </div>
+
+          {/* Snippet fallback if no messages loaded */}
+          {!loadingMsgs && !messages?.length && t.snippet && (
+            <div className="thread-snippet-fallback">"{t.snippet}"</div>
+          )}
+
+          {/* Reply area — colapsable, hidden for informativos */}
+          {!isInformativo && (
+            <div className="reply-area">
+              {!showReply ? (
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <button
+                    className="ctl-btn ctl-btn-suggest"
+                    style={{ fontSize: '11px' }}
+                    onClick={e => { e.stopPropagation(); setShowReply(true); }}
+                  >
+                    📝 Responder
+                  </button>
+                  <a href={GMAIL(t.thread_id)} target="_blank" rel="noreferrer" className="ctl-btn ctl-btn-reply" style={{ fontSize: '11px' }}>
+                    Gmail ↗
+                  </a>
+                </div>
+              ) : (
+                <>
+                  {showReplyAll && (
+                    <div className="reply-mode-toggle">
+                      <button className={`reply-mode-btn ${replyMode === 'reply' ? 'active' : ''}`}
+                        onClick={() => setReplyMode('reply')}>
+                        Responder
+                      </button>
+                      <button className={`reply-mode-btn ${replyMode === 'reply_all' ? 'active' : ''}`}
+                        onClick={() => setReplyMode('reply_all')}>
+                        Responder a todos ({replyAllContacts.length})
+                      </button>
+                    </div>
+                  )}
+                  <div className="reply-to-info">
+                    <span className="reply-to-label">Para: </span>
+                    <strong className="reply-to-email">{replyTo.to}</strong>
+                    {replyTo.name && replyTo.name !== replyTo.to && (
+                      <span className="reply-to-name"> ({replyTo.name})</span>
+                    )}
+                    {replyMode === 'reply_all' && ccRecipients && (
+                      <span className="reply-cc-list"><br/>CC: {ccRecipients}</span>
+                    )}
+                    <span className="reply-to-subject"> · {replyTo.subject}</span>
+                  </div>
+                  <textarea
+                    className="reply-input"
+                    placeholder="Escribe tu respuesta..."
+                    value={replyText}
+                    onChange={e => setReplyText(e.target.value)}
+                    rows={4}
+                    autoFocus
+                  />
+                  <div className="reply-actions">
+                    <button className="ctl-btn ctl-btn-suggest" onClick={suggestReply} disabled={suggestLoading}>
+                      {suggestLoading ? '✦ Generando...' : '✦ Jarvis'}
+                    </button>
+                    <button className="ctl-btn ctl-btn-send" onClick={sendReply} disabled={sendLoading || !replyText.trim()}>
+                      {sendLoading ? 'Enviando...' : 'Enviar'}
+                    </button>
+                    <a href={GMAIL(t.thread_id)} target="_blank" rel="noreferrer" className="ctl-btn ctl-btn-reply">
+                      Gmail ↗
+                    </a>
+                    <button className="ctl-btn" onClick={() => { setShowReply(false); setReplyText(''); }} style={{ fontSize: '11px', color: '#6b7280' }}>
+                      ✕ Cancelar
+                    </button>
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -1178,6 +1311,17 @@ export default function ClientActionList({ clientThreads, threadMetrics }) {
     setFeedbackThread(thread);
   }, []);
 
+  const handleSpam = useCallback((thread_id, data) => {
+    // Remove from all active lists
+    setLocalItems(prev => prev.filter(t => t.thread_id !== thread_id));
+    setUncategorized(prev => prev ? prev.filter(t => t.thread_id !== thread_id) : prev);
+    const msg = data?.domainBlocked
+      ? `✅ Spam marcado. Dominio ${data.domain} bloqueado — futuros correos descartados.`
+      : '✅ Marcado como spam en Jarvis y Gmail.';
+    setSilenceMsg(msg);
+    setTimeout(() => setSilenceMsg(null), 5000);
+  }, []);
+
   const handleFeedbackSent = useCallback((data) => {
     // Optimistically update local state with corrected classification
     if (data?.success && feedbackThread) {
@@ -1361,6 +1505,7 @@ export default function ClientActionList({ clientThreads, threadMetrics }) {
                 onTransition={handleTransition}
                 onSilenceDomain={handleSilenceDomain}
                 onSilencePattern={handleSilencePattern}
+                onSpam={handleSpam}
                 jiraStatus={jiraStatus[t.thread_id]}
               />
             ))
@@ -1375,6 +1520,7 @@ export default function ClientActionList({ clientThreads, threadMetrics }) {
                   onFeedback={handleFeedback}
                   onTransition={handleTransition}
                   onSilenceDomain={handleSilenceDomain}
+                  onSpam={handleSpam}
                   jiraStatus={jiraStatus[t.thread_id]}
                   isInformativo={true}
                 />
@@ -1391,6 +1537,7 @@ export default function ClientActionList({ clientThreads, threadMetrics }) {
                     onTransition={handleTransition}
                     onSilenceDomain={handleSilenceDomain}
                     onSilencePattern={handleSilencePattern}
+                    onSpam={handleSpam}
                     jiraStatus={jiraStatus[t.thread_id]}
                     isInformativo={t.estado === 'informativo'}
                   />

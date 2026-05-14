@@ -8,6 +8,19 @@ const USER = 'me';
 let _cachedToken = null;
 let _tokenExpiry = 0;
 
+// Label cache: Jarvis label name → Gmail label ID
+const _labelCache = new Map();
+
+const JARVIS_LABELS = [
+  'Jarvis/Procesado',
+  'Jarvis/Cliente',
+  'Jarvis/Proveedor',
+  'Jarvis/Spam',
+  'Jarvis/Acción Requerida',
+  'Jarvis/En Jira',
+  'Jarvis/Solucionado',
+];
+
 // ─── OAuth2 ───────────────────────────────────────────────────────────────────
 
 async function getAccessToken() {
@@ -56,16 +69,20 @@ function request(opts, body) {
 }
 
 async function gmail(method, path, body) {
-  const token = await getAccessToken();
-  return request({
+  const token  = await getAccessToken();
+  const result = await request({
     hostname: BASE,
-    path: `/gmail/v1/users/${USER}${path}`,
+    path:     `/gmail/v1/users/${USER}${path}`,
     method,
-    headers: {
-      Authorization: `Bearer ${token}`,
+    headers:  {
+      Authorization:  `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
   }, body);
+  if (result && typeof result === 'object' && result.error) {
+    throw new Error(`Gmail API ${result.error.code || ''}: ${result.error.message || result.error.status || 'error'}`);
+  }
+  return result;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -303,6 +320,101 @@ async function createDraft(to, subject, body, replyToMessageId) {
   return gmail('POST', '/drafts', payload);
 }
 
+// ─── Jarvis label system ──────────────────────────────────────────────────────
+
+/**
+ * Creates Jarvis/* labels in Gmail if they don't exist.
+ * Caches all label IDs in _labelCache. Non-fatal if it fails.
+ * Call once on server startup.
+ */
+async function ensureJarvisLabels() {
+  try {
+    const data = await gmail('GET', '/labels');
+    (data?.labels || []).forEach(l => _labelCache.set(l.name, l.id));
+
+    for (const name of JARVIS_LABELS) {
+      if (_labelCache.has(name)) continue;
+      try {
+        const created = await gmail('POST', '/labels', {
+          name,
+          labelListVisibility:   'labelShow',
+          messageListVisibility: 'show',
+        });
+        if (created?.id) _labelCache.set(name, created.id);
+      } catch (e) {
+        logger.warn('Could not create Jarvis label', { skill: SKILL, name, error: e.message });
+      }
+    }
+    logger.info('Jarvis labels ready', { skill: SKILL, cached: _labelCache.size });
+    return true;
+  } catch (e) {
+    logger.warn('ensureJarvisLabels failed — Gmail labels disabled', { skill: SKILL, error: e.message });
+    return false;
+  }
+}
+
+/**
+ * Apply/remove Jarvis custom labels on a thread (thread-level, applies to all messages).
+ * Uses _labelCache to resolve names → IDs; silently skips unresolved names.
+ * @param {string}   threadId
+ * @param {string[]} addLabelNames    - Jarvis label names to add  (e.g. 'Jarvis/Cliente')
+ * @param {string[]} removeLabelNames - Jarvis label names to remove
+ * @param {boolean}  markRead         - also remove system UNREAD label
+ */
+async function modifyThread(threadId, addLabelNames = [], removeLabelNames = [], markRead = false) {
+  const addIds    = addLabelNames.map(n => _labelCache.get(n)).filter(Boolean);
+  const removeIds = [
+    ...removeLabelNames.map(n => _labelCache.get(n)).filter(Boolean),
+    ...(markRead ? ['UNREAD'] : []),
+  ];
+  if (!addIds.length && !removeIds.length) return { success: true };
+
+  try {
+    const body = {};
+    if (addIds.length)    body.addLabelIds    = addIds;
+    if (removeIds.length) body.removeLabelIds = removeIds;
+    await gmail('POST', `/threads/${threadId}/modify`, body);
+    return { success: true };
+  } catch (err) {
+    logger.warn('modifyThread failed', { skill: SKILL, threadId, error: err.message });
+    return { success: false, error: err.message };
+  }
+}
+
+/** Remove INBOX from all messages — moves thread out of inbox (archive). */
+async function archiveGmailThread(threadId) {
+  try {
+    const body = { removeLabelIds: ['INBOX'] };
+    // Add Jarvis/Solucionado if cached
+    const solId = _labelCache.get('Jarvis/Solucionado');
+    if (solId) body.addLabelIds = [solId];
+    await gmail('POST', `/threads/${threadId}/modify`, body);
+    return { success: true };
+  } catch (err) {
+    logger.warn('archiveGmailThread failed', { skill: SKILL, threadId, error: err.message });
+    return { success: false, error: err.message };
+  }
+}
+
+/** Mark thread as spam in Gmail: adds SPAM + Jarvis/Spam, removes INBOX, marks read. */
+async function markThreadAsSpam(threadId) {
+  try {
+    const addIds = ['SPAM'];
+    const spamId = _labelCache.get('Jarvis/Spam');
+    if (spamId) addIds.push(spamId);
+    await gmail('POST', `/threads/${threadId}/modify`, {
+      addLabelIds:    addIds,
+      removeLabelIds: ['INBOX', 'UNREAD'],
+    });
+    return { success: true };
+  } catch (err) {
+    logger.warn('markThreadAsSpam failed', { skill: SKILL, threadId, error: err.message });
+    return { success: false, error: err.message };
+  }
+}
+
+// ─── Phishing / spam ──────────────────────────────────────────────────────────
+
 // Mark a thread as phishing/spam — moves out of INBOX and signals Google
 async function reportPhishing(threadId) {
   logger.info('Reporting phishing', { skill: SKILL, threadId });
@@ -362,4 +474,5 @@ module.exports = {
   getFullThread, sendReply,
   listLabels, applyLabel, removeLabel, createLabel, createDraft,
   reportPhishing, healthCheck,
+  ensureJarvisLabels, modifyThread, archiveGmailThread, markThreadAsSpam,
 };
