@@ -178,6 +178,32 @@ async function getActiveSprintForProject(projectKey) {
   return getActiveSprint(boardId);
 }
 
+async function getSprintIssues(sprintId) {
+  if (!sprintId) return [];
+  try {
+    const data = await requestAgile('GET', `/sprint/${sprintId}/issue?maxResults=50&fields=summary,status,assignee,priority,timeoriginalestimate,duedate,updated`);
+    const { ageDays } = require('../utils/date-helpers');
+    const today = new Date(); today.setHours(0,0,0,0);
+    return (data?.issues || []).map(issue => {
+      const f   = issue.fields || {};
+      const due = f.duedate ? new Date(f.duedate) : null;
+      return {
+        key:          issue.key,
+        summary:      f.summary || '',
+        status:       f.status?.name || 'To Do',
+        assignee:     f.assignee?.displayName || null,
+        priority:     f.priority?.name || 'Medium',
+        timeEstimate: f.timeoriginalestimate ? `${Math.round(f.timeoriginalestimate / 3600)}h` : null,
+        overdue:      due ? due < today : false,
+        url:          ticketUrl(issue.key),
+      };
+    });
+  } catch (err) {
+    logger.debug('getSprintIssues failed', { skill: SKILL, sprintId, error: err.message });
+    return [];
+  }
+}
+
 async function moveToSprint(issueKey, sprintId) {
   logger.info('Moving issue to sprint', { skill: SKILL, issueKey, sprintId });
   return requestAgile('POST', `/sprint/${sprintId}/issue`, { issues: [issueKey] });
@@ -358,6 +384,6 @@ module.exports = {
   getMyTasks, getIssue, getClientTasks,
   createIssue, createTicket,
   searchRelatedTickets, getAvailableProjects, getProjectMeta, getLinkedTicket,
-  getActiveSprint, getActiveSprintForProject, moveToSprint,
+  getActiveSprint, getActiveSprintForProject, getSprintIssues, moveToSprint,
   healthCheck,
 };

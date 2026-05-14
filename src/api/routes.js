@@ -1850,6 +1850,152 @@ router.get('/agent/candidates', (req, res) => {
   }
 });
 
+// ─── Sprint summary (for Home cockpit card) ───────────────────────────────────
+
+let _sprintSummaryCache = null;
+let _sprintSummaryCacheAt = 0;
+const SPRINT_SUMMARY_TTL = 5 * 60 * 1000; // 5 min
+
+router.get('/agent/sprint-summary', async (req, res) => {
+  try {
+    if (_sprintSummaryCache && Date.now() - _sprintSummaryCacheAt < SPRINT_SUMMARY_TTL) {
+      return res.json(_sprintSummaryCache);
+    }
+
+    const jira = require('../mcp/jira');
+    const BOARDS = [{ project: 'CLICK', boardId: 67 }, { project: 'WYS', boardId: 100 }];
+
+    const allTickets = [];
+    let activeSprint  = null;
+
+    for (const { project, boardId } of BOARDS) {
+      try {
+        const sprint = await jira.getActiveSprint(boardId);
+        if (sprint) {
+          if (!activeSprint) activeSprint = sprint;
+          const sprintTickets = await jira.getSprintIssues(sprint.id);
+          sprintTickets.forEach(t => allTickets.push({ ...t, project }));
+        }
+      } catch (e) {
+        logger.debug('Sprint summary board failed', { boardId, error: e.message });
+      }
+    }
+
+    // Fallback: getMyTasks
+    let tickets = allTickets;
+    if (!tickets.length) {
+      try {
+        tickets = (await jira.getMyTasks()).map(t => ({ ...t, project: t.key?.split('-')[0] || 'CLICK' }));
+      } catch (e) { tickets = []; }
+    }
+
+    const summary = {
+      total:      tickets.length,
+      inProgress: tickets.filter(t => t.status?.toLowerCase().includes('progress')).length,
+      todo:       tickets.filter(t => t.status?.toLowerCase().includes('do') || t.status === 'To Do').length,
+      done:       tickets.filter(t => t.status?.toLowerCase().includes('done')).length,
+      overdue:    tickets.filter(t => t.overdue).length,
+    };
+
+    const result = {
+      sprint:   activeSprint,
+      tickets:  tickets.slice(0, 20),
+      summary,
+      jiraAvailable: true,
+    };
+
+    _sprintSummaryCache   = result;
+    _sprintSummaryCacheAt = Date.now();
+    res.json(result);
+  } catch (err) {
+    logger.debug('Sprint summary failed', { error: err.message });
+    res.json({ sprint: null, tickets: [], summary: { total: 0, inProgress: 0, todo: 0, done: 0, overdue: 0 }, jiraAvailable: false });
+  }
+});
+
+// ─── Alerts (for Home cockpit card) ──────────────────────────────────────────
+
+router.get('/agent/alerts', (req, res) => {
+  try {
+    const db    = require('../db/database');
+    const sqlDb = db.getDb();
+    const alerts = [];
+
+    // 1. Urgent emails without response > 7 days
+    const urgentThreads = sqlDb.prepare(`
+      SELECT thread_id, subject, client_name, date,
+             CAST(julianday('now') - julianday(date) AS INTEGER) AS days
+      FROM threads
+      WHERE estado IN ('requiere_mi_accion', 'esperando_nosotros', 'pendiente')
+        AND severity IN ('high', 'critical')
+        AND last_sender_is_me = 0
+        AND CAST(julianday('now') - julianday(date) AS INTEGER) >= 7
+      ORDER BY days DESC
+      LIMIT 5
+    `).all();
+
+    urgentThreads.forEach(t => {
+      alerts.push({
+        type:     'email',
+        severity: t.days >= 14 ? 'critical' : 'warning',
+        text:     `${t.client_name || '(desconocido)'} lleva ${t.days} días sin respuesta — "${(t.subject || '').substring(0, 50)}"`,
+        link:     '/correo',
+        thread_id: t.thread_id,
+        days:     t.days,
+      });
+    });
+
+    // 2. Threads awaiting client > 14 days
+    const waitingLong = sqlDb.prepare(`
+      SELECT thread_id, subject, client_name,
+             CAST(julianday('now') - julianday(updated_at) AS INTEGER) AS days
+      FROM threads
+      WHERE estado = 'esperando_cliente'
+        AND CAST(julianday('now') - julianday(updated_at) AS INTEGER) >= 14
+      ORDER BY days DESC
+      LIMIT 3
+    `).all();
+
+    waitingLong.forEach(t => {
+      alerts.push({
+        type:     'email',
+        severity: 'warning',
+        text:     `${t.client_name || '(cliente)'} esperando cliente hace ${t.days} días — "${(t.subject || '').substring(0, 40)}"`,
+        link:     '/correo',
+        thread_id: t.thread_id,
+        days:     t.days,
+      });
+    });
+
+    // 3. Overdue Jira tasks (from cache if available)
+    if (_sprintSummaryCache && _sprintSummaryCache.tickets) {
+      const overdueTasks = _sprintSummaryCache.tickets.filter(t => t.overdue);
+      overdueTasks.slice(0, 3).forEach(t => {
+        alerts.push({
+          type:     'task',
+          severity: 'warning',
+          text:     `${t.key} está atrasada — "${(t.summary || '').substring(0, 50)}"`,
+          link:     '/sprint',
+          jira_key: t.key,
+          jira_url: t.url,
+        });
+      });
+    }
+
+    // Sort: critical first, then by days desc
+    alerts.sort((a, b) => {
+      if (a.severity === 'critical' && b.severity !== 'critical') return -1;
+      if (b.severity === 'critical' && a.severity !== 'critical') return  1;
+      return (b.days || 0) - (a.days || 0);
+    });
+
+    res.json({ alerts, total: alerts.length });
+  } catch (err) {
+    logger.error('Alerts failed', { error: err.message });
+    res.json({ alerts: [], total: 0 });
+  }
+});
+
 router.put('/contacts/:email', (req, res) => {
   try {
     const db = require('../db/database');
