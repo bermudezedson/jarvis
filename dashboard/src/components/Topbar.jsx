@@ -36,6 +36,20 @@ export default function Topbar({ lastRefresh, onRefreshed, onOpenThread }) {
       ? 'Ahora mismo'
       : `hace ${minsAgo} min`;
 
+  const [syncing, setSyncing] = useState(false);
+
+  async function handleGmailSync() {
+    setSyncing(true);
+    try {
+      const res  = await fetch(`${API}/mail/sync-gmail-labels`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const data = await res.json();
+      pushNotification(`Labels Gmail sincronizados: ${data.synced} hilos actualizados${data.failed > 0 ? `, ${data.failed} fallidos` : ''}`, 'success');
+    } catch (e) {
+      pushNotification('Error al sincronizar labels: ' + e.message, 'error');
+    }
+    setSyncing(false);
+  }
+
   async function handleScan() {
     setScanning(true);
     try {
@@ -70,6 +84,17 @@ export default function Topbar({ lastRefresh, onRefreshed, onOpenThread }) {
           <span className={`topbar-sync-dot ${isStale ? 'stale' : 'ok'}`} />
           {isStale ? 'Desactualizado' : `Sincronizado ${syncLabel}`}
         </span>
+
+        {/* Gmail labels sync */}
+        <button
+          className={`topbar-btn ${syncing ? 'topbar-btn--loading' : ''}`}
+          onClick={handleGmailSync}
+          disabled={syncing}
+          title="Sincronizar labels de Jarvis en Gmail para todos los correos"
+          style={{ fontSize: '11px' }}
+        >
+          {syncing ? '⟳ Sincronizando...' : '✉ Sync Gmail'}
+        </button>
 
         {/* Refresh button */}
         <button

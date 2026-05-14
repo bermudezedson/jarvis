@@ -531,9 +531,8 @@ router.post('/mail/client-archive', (req, res) => {
     // Regenerate JSON cache asynchronously
     const mailOps = require('../skills/mail-ops');
     mailOps.classifyClientThreads({ mode: 'refresh_states' }).catch(() => {});
-    // Gmail sync (best-effort)
     ;(async () => {
-      try { await require('../mcp/gmail').archiveGmailThread(thread_id); } catch (_) {}
+      try { await syncThreadLabels({ thread_id, client_name: null, source_type: null, jira_issue_key: null, estado: 'archivado' }); } catch (e) { logger.warn('Gmail sync failed', { thread_id, error: e.message }); }
     })();
     logger.info('Client thread archived', { thread_id });
     res.json({ success: true, ...result });
@@ -551,12 +550,12 @@ router.post('/mail/client-resolve', (req, res) => {
     if (!result) return res.status(404).json({ error: 'Thread not found' });
     const mailOps = require('../skills/mail-ops');
     mailOps.classifyClientThreads({ mode: 'refresh_states' }).catch(() => {});
-    // Gmail sync: add Solucionado label, mark read (best-effort)
     ;(async () => {
       try {
-        const gmail = require('../mcp/gmail');
-        await gmail.modifyThread(thread_id, ['Jarvis/Solucionado'], ['Jarvis/Acción Requerida'], true);
-      } catch (_) {}
+        const db = require('../db/database');
+        const t  = db.getDb().prepare('SELECT thread_id, client_name, source_type FROM threads WHERE thread_id = ?').get(thread_id);
+        if (t) await syncThreadLabels({ ...t, estado: 'solucionado' });
+      } catch (e) { logger.warn('Gmail sync failed', { thread_id, error: e.message }); }
     })();
     logger.info('Client thread resolved', { thread_id, resolution_hours: result.resolution_time_hours });
     res.json({ success: true, ...result });
@@ -1425,18 +1424,13 @@ router.post('/mail/thread/:threadId/transition', (req, res) => {
     const sm = require('../skills/state-machine');
     const result = sm.transition(threadId, estado, note || '');
     if (result.error) return res.status(400).json(result);
-    // Gmail sync (fire-and-forget)
+    // Gmail label sync using unified labelsForEstado logic (fire-and-forget)
     ;(async () => {
       try {
-        const gmail = require('../mcp/gmail');
-        if (estado === 'solucionado') {
-          await gmail.modifyThread(threadId, ['Jarvis/Solucionado'], ['Jarvis/Acción Requerida'], true);
-        } else if (estado === 'archivado') {
-          await gmail.archiveGmailThread(threadId);
-        } else if (estado === 'requiere_mi_accion' || estado === 'esperando_nosotros') {
-          await gmail.modifyThread(threadId, ['Jarvis/Acción Requerida'], ['Jarvis/Solucionado'], false);
-        }
-      } catch (_) {}
+        const db      = require('../db/database');
+        const thread  = db.getDb().prepare('SELECT thread_id, client_name, source_type, jira_issue_key FROM threads WHERE thread_id = ?').get(threadId);
+        if (thread) await syncThreadLabels({ ...thread, estado });
+      } catch (gmailErr) { logger.warn('Gmail sync failed', { threadId, error: gmailErr.message }); }
     })();
     res.json(result);
   } catch (err) {
@@ -1807,12 +1801,12 @@ router.post('/agent/action/:actionId/create-ticket', async (req, res) => {
       WHERE thread_id = ?
     `).run(ticket.key, action.thread_id);
 
-    // Gmail sync: add En Jira label (fire-and-forget)
     ;(async () => {
       try {
-        const gmail = require('../mcp/gmail');
-        await gmail.modifyThread(action.thread_id, ['Jarvis/En Jira'], ['Jarvis/Acción Requerida'], false);
-      } catch (_) {}
+        const db = require('../db/database');
+        const t  = db.getDb().prepare('SELECT thread_id, client_name, source_type FROM threads WHERE thread_id = ?').get(action.thread_id);
+        if (t) await syncThreadLabels({ ...t, estado: 'en_jira' });
+      } catch (e) { logger.warn('Gmail sync failed', { thread_id: action.thread_id, error: e.message }); }
     })();
 
     logger.info('Jira ticket created from action', { key: ticket.key, actionId, thread_id: action.thread_id });
@@ -1998,6 +1992,107 @@ router.get('/agent/alerts', (req, res) => {
   } catch (err) {
     logger.error('Alerts failed', { error: err.message });
     res.json({ alerts: [], total: 0 });
+  }
+});
+
+// ─── Gmail label sync (bulk + on-demand) ─────────────────────────────────────
+
+/**
+ * Returns the correct Jarvis label names for a thread's current estado.
+ * Used both in bulk sync and individual state changes.
+ */
+function labelsForEstado(thread) {
+  const { estado, client_name, source_type } = thread;
+  const add = [];
+  const remove = [];
+
+  add.push('Jarvis/Procesado');
+
+  if (estado === 'en_jira') {
+    add.push('Jarvis/En Jira');
+    remove.push('Jarvis/Acción Requerida');
+  } else if (estado === 'solucionado') {
+    add.push('Jarvis/Solucionado');
+    remove.push('Jarvis/Acción Requerida', 'Jarvis/En Jira');
+  } else if (estado === 'archivado') {
+    remove.push('Jarvis/Acción Requerida', 'Jarvis/En Jira');
+  } else if (estado === 'requiere_mi_accion' || estado === 'esperando_nosotros') {
+    add.push('Jarvis/Acción Requerida');
+    if (client_name) add.push('Jarvis/Cliente');
+  } else if (estado === 'pendiente') {
+    add.push('Jarvis/Acción Requerida');
+    if (client_name) add.push('Jarvis/Cliente');
+  } else if (estado === 'esperando_cliente') {
+    if (client_name) add.push('Jarvis/Cliente');
+    remove.push('Jarvis/Acción Requerida');
+  } else if (estado === 'informativo') {
+    remove.push('Jarvis/Acción Requerida');
+  }
+
+  if (client_name && !add.includes('Jarvis/Cliente')) {
+    add.push('Jarvis/Cliente');
+  }
+  if (source_type === 'provider') add.push('Jarvis/Proveedor');
+
+  // Deduplicate
+  return { add: [...new Set(add)], remove: [...new Set(remove)] };
+}
+
+/** Apply correct Gmail labels to a single thread based on its current estado. */
+async function syncThreadLabels(thread) {
+  const gmail   = require('../mcp/gmail');
+  const { add, remove } = labelsForEstado(thread);
+  const markRead = ['informativo', 'archivado', 'solucionado', 'en_jira'].includes(thread.estado);
+  return gmail.modifyThread(thread.thread_id, add, remove, markRead);
+}
+
+/**
+ * POST /api/mail/sync-gmail-labels
+ * Syncs Gmail labels for all (or filtered) threads in SQLite.
+ * Body: { estados?: string[], limit?: number }
+ */
+router.post('/mail/sync-gmail-labels', async (req, res) => {
+  try {
+    const gmail = require('../mcp/gmail');
+    const db    = require('../db/database');
+    const sqlDb = db.getDb();
+
+    const { estados, limit = 200 } = req.body || {};
+
+    // Ensure labels exist
+    await gmail.ensureJarvisLabels();
+
+    // Pick threads to sync
+    let query = 'SELECT thread_id, subject, client_name, estado, source_type, severity, jira_issue_key FROM threads';
+    const params = [];
+    if (estados?.length) {
+      query += ` WHERE estado IN (${estados.map(() => '?').join(',')})`;
+      params.push(...estados);
+    }
+    query += ` ORDER BY date DESC LIMIT ${parseInt(limit, 10) || 200}`;
+
+    const threads = sqlDb.prepare(query).all(...params);
+
+    let synced = 0;
+    let failed = 0;
+
+    for (const t of threads) {
+      try {
+        await syncThreadLabels(t);
+        synced++;
+      } catch (e) {
+        failed++;
+        logger.warn('Sync label failed', { thread_id: t.thread_id, error: e.message });
+      }
+      // Small delay to avoid Gmail rate limits (250 quota units/sec)
+      await new Promise(r => setTimeout(r, 50));
+    }
+
+    logger.info('Gmail labels synced', { synced, failed, total: threads.length });
+    res.json({ success: true, synced, failed, total: threads.length });
+  } catch (err) {
+    logger.error('Sync gmail labels failed', { error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 

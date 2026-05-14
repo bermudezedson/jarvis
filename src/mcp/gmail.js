@@ -362,6 +362,14 @@ async function ensureJarvisLabels() {
  * @param {boolean}  markRead         - also remove system UNREAD label
  */
 async function modifyThread(threadId, addLabelNames = [], removeLabelNames = [], markRead = false) {
+  // Auto-initialize label cache if any requested label is missing
+  // This handles server restarts where ensureJarvisLabels hasn't run yet
+  const needsInit = addLabelNames.some(n => n.startsWith('Jarvis/') && !_labelCache.has(n))
+    || removeLabelNames.some(n => n.startsWith('Jarvis/') && !_labelCache.has(n));
+  if (needsInit) {
+    try { await ensureJarvisLabels(); } catch {}
+  }
+
   const addIds    = addLabelNames.map(n => _labelCache.get(n)).filter(Boolean);
   const removeIds = [
     ...removeLabelNames.map(n => _labelCache.get(n)).filter(Boolean),
