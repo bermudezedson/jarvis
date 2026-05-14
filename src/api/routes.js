@@ -2001,6 +2001,122 @@ router.get('/agent/alerts', (req, res) => {
   }
 });
 
+// ─── Global search ───────────────────────────────────────────────────────────
+
+router.get('/search', (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (!q || q.length < 3) return res.json({ threads: [], actions: [], clients: [], total: 0, query: q });
+
+  try {
+    const db    = require('../db/database');
+    const sqlDb = db.getDb();
+    const like  = `%${q}%`;
+
+    // ── A) Detect special query types ─────────────────────────────────────────
+
+    const isMessageId = q.includes('<') || (q.includes('@') && q.includes('.') && !q.includes(' ') && q.split('@').length === 2 && q.split('@')[0].length > 15);
+    const isEmail     = !isMessageId && q.includes('@') && q.includes('.');
+
+    // ── B) Search threads ─────────────────────────────────────────────────────
+
+    let threads = [];
+    if (isEmail) {
+      threads = sqlDb.prepare(`
+        SELECT DISTINCT t.thread_id, t.subject, t.client_name, t.estado,
+               t.severity, t.date, t.jira_issue_key, t.last_from_email
+        FROM threads t
+        WHERE t.original_from LIKE ? OR t.last_from_email LIKE ?
+        ORDER BY t.date DESC LIMIT 10
+      `).all(like, like);
+
+      if (threads.length === 0) {
+        // Also search messages table for that email
+        const msgThreads = sqlDb.prepare(`
+          SELECT DISTINCT t.thread_id, t.subject, t.client_name, t.estado,
+                 t.severity, t.date, t.jira_issue_key, t.last_from_email
+          FROM messages m
+          JOIN threads t ON m.thread_id = t.thread_id
+          WHERE m.sender_email LIKE ?
+          ORDER BY t.date DESC LIMIT 10
+        `).all(like);
+        threads = msgThreads;
+      }
+    } else {
+      threads = sqlDb.prepare(`
+        SELECT DISTINCT t.thread_id, t.subject, t.client_name, t.estado,
+               t.severity, t.date, t.jira_issue_key, t.last_from_email
+        FROM threads t
+        WHERE t.subject LIKE ?
+           OR t.client_name LIKE ?
+           OR t.original_from LIKE ?
+           OR t.last_from_email LIKE ?
+           OR t.snippet LIKE ?
+        ORDER BY t.date DESC LIMIT 10
+      `).all(like, like, like, like, like);
+
+      // Also search messages for broader matches
+      if (threads.length < 5) {
+        const extra = sqlDb.prepare(`
+          SELECT DISTINCT t.thread_id, t.subject, t.client_name, t.estado,
+                 t.severity, t.date, t.jira_issue_key, t.last_from_email
+          FROM messages m
+          JOIN threads t ON m.thread_id = t.thread_id
+          WHERE m.sender LIKE ? AND t.thread_id NOT IN (${threads.map(() => '?').join(',') || "''"})
+          ORDER BY t.date DESC LIMIT 5
+        `).all(like, ...threads.map(x => x.thread_id));
+        threads = [...threads, ...extra].slice(0, 10);
+      }
+    }
+
+    // ── C) Search proposed_actions ────────────────────────────────────────────
+
+    const actions = sqlDb.prepare(`
+      SELECT pa.id, pa.description, pa.action_type as type, pa.status,
+             t.subject as thread_subject, t.client_name
+      FROM proposed_actions pa
+      JOIN threads t ON pa.thread_id = t.thread_id
+      WHERE pa.description LIKE ? AND pa.status = 'pending'
+      ORDER BY pa.created_at DESC LIMIT 5
+    `).all(like);
+
+    // ── D) Search clients from clients.yml ────────────────────────────────────
+
+    let clients = [];
+    try {
+      const fs    = require('fs');
+      const path  = require('path');
+      const yaml  = require('js-yaml');
+      const cfg   = yaml.load(fs.readFileSync(path.join(__dirname, '../../config/clients.yml'), 'utf8'));
+      const qLow  = q.toLowerCase();
+      clients = (cfg.clients || [])
+        .filter(c =>
+          c.name?.toLowerCase().includes(qLow) ||
+          c.domains?.some(d => d.toLowerCase().includes(qLow)) ||
+          c.contacts?.some(e => e.toLowerCase().includes(qLow))
+        )
+        .slice(0, 5)
+        .map(c => ({ name: c.name, empresa: c.empresa, domains: c.domains || [] }));
+    } catch {}
+
+    // ── E) Message-ID not found handling ─────────────────────────────────────
+
+    if (isMessageId && threads.length === 0) {
+      return res.json({
+        threads: [], actions: [], clients: [],
+        total: 0, query: q,
+        not_found_message_id: true,
+        suggestion: 'Este Message-ID no está en Jarvis. Ejecuta ↻ Actualizar para importarlo desde Gmail.',
+      });
+    }
+
+    const total = threads.length + actions.length + clients.length;
+    res.json({ threads, actions, clients, total, query: q });
+  } catch (err) {
+    logger.error('Search failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.put('/contacts/:email', (req, res) => {
   try {
     const db = require('../db/database');

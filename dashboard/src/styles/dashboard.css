@@ -2124,3 +2124,89 @@ html, body, #root { height: 100%; background: var(--bg); color: var(--text); fon
 .post-send-btn--green { background: rgba(34,197,94,.2);  color: var(--green);  border-color: rgba(34,197,94,.4); }
 .post-send-btn--blue  { background: rgba(74,143,217,.2); color: var(--blue);   border-color: rgba(74,143,217,.4); }
 .post-send-btn--gray  { background: rgba(255,255,255,.06); color: var(--muted); border-color: var(--border); }
+
+/* ─── Topbar center ──────────────────────────────────────────────────────── */
+.topbar-center { flex: 1; display: flex; justify-content: center; padding: 0 16px; max-width: 500px; margin: 0 auto; }
+
+/* ─── Global Search ──────────────────────────────────────────────────────── */
+.gsearch-wrapper { position: relative; width: 100%; max-width: 440px; }
+
+.gsearch-input-wrap {
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(255,255,255,.06); border: 1px solid var(--border);
+  border-radius: 8px; padding: 5px 10px;
+  transition: border-color .15s, width .2s;
+  width: 300px;
+}
+.gsearch-input-wrap--focused {
+  border-color: rgba(255,255,255,.25); background: rgba(255,255,255,.08);
+  width: 400px;
+}
+.gsearch-icon  { font-size: 13px; opacity: .5; flex-shrink: 0; }
+.gsearch-input {
+  flex: 1; background: none; border: none; outline: none;
+  color: var(--text); font-size: 12px; min-width: 0;
+}
+.gsearch-input::placeholder { color: var(--muted); }
+.gsearch-clear {
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 10px; padding: 0; flex-shrink: 0; transition: color .12s;
+}
+.gsearch-clear:hover { color: var(--text); }
+.gsearch-shortcut {
+  font-size: 10px; color: var(--muted);
+  background: rgba(255,255,255,.06); border: 1px solid var(--border);
+  border-radius: 3px; padding: 1px 4px; flex-shrink: 0;
+}
+.gsearch-input-wrap--focused .gsearch-shortcut { display: none; }
+
+/* Dropdown */
+.gsearch-dropdown {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.6); z-index: 200;
+  max-height: 420px; overflow-y: auto;
+  animation: gsearch-appear .1s ease;
+}
+@keyframes gsearch-appear {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.gsearch-loading { padding: 14px 16px; font-size: 12px; color: var(--muted); }
+.gsearch-empty   { padding: 14px 16px; font-size: 12px; color: var(--text); }
+.gsearch-empty-hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+.gsearch-not-found { padding: 14px 16px; }
+.gsearch-nf-title  { font-size: 12px; color: var(--yellow); font-weight: 600; }
+.gsearch-nf-hint   { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+.gsearch-section { padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+.gsearch-section:last-child { border-bottom: none; }
+.gsearch-section-label {
+  padding: 6px 14px 4px; font-size: 10px; font-weight: 600;
+  color: var(--muted); text-transform: uppercase; letter-spacing: .06em;
+}
+
+.gsearch-result {
+  display: flex; align-items: flex-start; gap: 8px; width: 100%;
+  padding: 7px 14px; background: none; border: none; cursor: pointer;
+  text-align: left; transition: background .1s;
+}
+.gsearch-result:hover { background: rgba(255,255,255,.04); }
+.gsearch-result-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.gsearch-result-client  { font-size: 11px; font-weight: 600; color: var(--text); }
+.gsearch-result-subject { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gsearch-result-right   { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.gsearch-age     { font-size: 10px; color: var(--muted); }
+
+.gsearch-estado { font-size: 10px; padding: 1px 5px; border-radius: 3px; }
+.gsearch-estado--requiere_mi_accion,
+.gsearch-estado--esperando_nosotros { background: rgba(201,27,27,.15); color: #f87171; }
+.gsearch-estado--pendiente          { background: rgba(200,134,10,.12); color: var(--yellow); }
+.gsearch-estado--esperando_cliente  { background: rgba(74,143,217,.12); color: var(--blue); }
+.gsearch-estado--en_jira            { background: rgba(74,143,217,.12); color: var(--blue); }
+.gsearch-estado--solucionado        { background: rgba(34,197,94,.12);  color: var(--green); }
+.gsearch-estado--informativo,
+.gsearch-estado--archivado          { background: rgba(255,255,255,.06); color: var(--muted); }
+.gsearch-estado--pending            { background: rgba(200,134,10,.12); color: var(--yellow); }

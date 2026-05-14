@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useNotifications, pushNotification } from '../hooks/useNotifications';
+import GlobalSearch from './GlobalSearch';
 
 const API = 'http://localhost:3000/api';
 const JIRA_URL = 'https://alejandro-bermudez.atlassian.net';
@@ -16,7 +17,7 @@ const SECTION_LABELS = {
   '/config':   'Configuración',
 };
 
-export default function Topbar({ lastRefresh, onRefreshed }) {
+export default function Topbar({ lastRefresh, onRefreshed, onOpenThread }) {
   const location = useLocation();
   const [scanning, setScanning] = useState(false);
   const [showNotifs, setShowNotifs] = useState(false);
@@ -57,6 +58,10 @@ export default function Topbar({ lastRefresh, onRefreshed }) {
         <span className="topbar-breadcrumb">
           {section && <span className="topbar-section">/ {section}</span>}
         </span>
+      </div>
+
+      <div className="topbar-center">
+        <GlobalSearch onOpenThread={onOpenThread} />
       </div>
 
       <div className="topbar-right">
