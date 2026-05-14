@@ -1171,5 +1171,5 @@ async function runUniversalScan({ timeWindowMinutes } = {}) {
 
 module.exports = {
   classify, classifyClientThreads, applyLabels, classifyThread, CATEGORIES,
-  generateSummaryForThread, runUniversalScan,
+  generateSummaryForThread, runUniversalScan, processUniversalScan,
 };

@@ -425,6 +425,43 @@ async function reportPhishing(threadId) {
   });
 }
 
+// ─── Targeted search for import ──────────────────────────────────────────────
+
+function cleanMessageId(raw) {
+  return (raw || '')
+    .replace(/^Message-ID:\s*/i, '')
+    .replace(/^<|>$/g, '')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+function buildGmailQuery(query) {
+  const q = (query || '').trim();
+  // Message-ID pattern: contains @ with no spaces and long local part
+  const looksLikeMsgId = q.includes('@') && !q.includes(' ') && q.split('@')[0].length > 8;
+  if (looksLikeMsgId || q.startsWith('<')) {
+    return `rfc822msgid:${cleanMessageId(q)}`;
+  }
+  // Email pattern: user@domain.tld with no spaces
+  const looksLikeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(q);
+  if (looksLikeEmail) {
+    return `from:${q} OR to:${q}`;
+  }
+  // Free-text: pass through as Gmail search
+  return q;
+}
+
+/**
+ * Search Gmail for threads matching query (Message-ID, email, or free text).
+ * Returns normalized thread objects ready for processUniversalScan.
+ * Limits to maxResults threads, no date restriction (Gmail handles recency).
+ */
+async function searchGmailByQuery(query, maxResults = 5) {
+  const gmailQuery = buildGmailQuery(query);
+  logger.info('Gmail targeted search', { skill: SKILL, query, gmailQuery });
+  return fetchThreads(gmailQuery, maxResults);
+}
+
 async function healthCheck() {
   try {
     const profile = await gmail('GET', '/profile');
@@ -475,4 +512,5 @@ module.exports = {
   listLabels, applyLabel, removeLabel, createLabel, createDraft,
   reportPhishing, healthCheck,
   ensureJarvisLabels, modifyThread, archiveGmailThread, markThreadAsSpam,
+  searchGmailByQuery, buildGmailQuery,
 };

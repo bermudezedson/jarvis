@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 const API = 'http://localhost:3000/api';
@@ -29,11 +29,65 @@ function useDebounce(value, ms) {
   return debounced;
 }
 
+// ─── Import from Gmail button + result ───────────────────────────────────────
+
+function ImportButton({ query, importing, importResult, onImport, onOpenThread }) {
+  if (importResult) {
+    // Error
+    if (importResult.error) {
+      return <div className="gsearch-import-result gsearch-import-result--error">⚠ Error: {importResult.error}</div>;
+    }
+
+    // Nothing found in Gmail
+    if (importResult.total === 0) {
+      return <div className="gsearch-import-result">Sin resultados en Gmail para "{query}" (últimos 30 días)</div>;
+    }
+
+    const all = [...(importResult.imported || []), ...(importResult.already_existed || [])];
+    return (
+      <div className="gsearch-import-result gsearch-import-result--success">
+        <div className="gsearch-import-ok">
+          {importResult.imported?.length > 0
+            ? `✅ ${importResult.imported.length} correo${importResult.imported.length > 1 ? 's' : ''} importado${importResult.imported.length > 1 ? 's' : ''}`
+            : ''}
+          {importResult.already_existed?.length > 0
+            ? ` · ${importResult.already_existed.length} ya estaba${importResult.already_existed.length > 1 ? 'n' : ''} en Jarvis`
+            : ''}
+        </div>
+        {all.map(t => (
+          <button key={t.thread_id} className="gsearch-result" onClick={() => onOpenThread(t)} style={{ width: '100%' }}>
+            <span className={`email-dot ${ESTADO_DOT[t.estado] || 'dot-gray'}`} style={{ flexShrink: 0, marginTop: 3 }} />
+            <div className="gsearch-result-body">
+              <span className="gsearch-result-client">{t.client_name || '?'}</span>
+              <span className="gsearch-result-subject">{(t.subject || '').substring(0, 60)}</span>
+            </div>
+            <span className={`gsearch-estado gsearch-estado--${t.estado}`}>{t.estado?.replace(/_/g, ' ')}</span>
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      className="gsearch-import-btn"
+      onClick={onImport}
+      disabled={importing}
+    >
+      {importing ? '⟳ Buscando en Gmail…' : '📥 Buscar e importar desde Gmail'}
+    </button>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
+
 export default function GlobalSearch({ onOpenThread }) {
-  const [query,    setQuery]    = useState('');
-  const [results,  setResults]  = useState(null);
-  const [loading,  setLoading]  = useState(false);
-  const [focused,  setFocused]  = useState(false);
+  const [query,        setQuery]        = useState('');
+  const [results,      setResults]      = useState(null);
+  const [loading,      setLoading]      = useState(false);
+  const [focused,      setFocused]      = useState(false);
+  const [importing,    setImporting]    = useState(false);
+  const [importResult, setImportResult] = useState(null);
   const inputRef   = useRef(null);
   const dropRef    = useRef(null);
   const navigate   = useNavigate();
@@ -75,7 +129,25 @@ export default function GlobalSearch({ onOpenThread }) {
     return () => document.removeEventListener('mousedown', h);
   }, []);
 
-  function close() { setFocused(false); setQuery(''); setResults(null); }
+  function close() { setFocused(false); setQuery(''); setResults(null); setImportResult(null); }
+
+  async function handleImport() {
+    if (!query.trim()) return;
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const res  = await fetch(`${API}/mail/import-thread`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ query: query.trim() }),
+      });
+      const data = await res.json();
+      setImportResult(data);
+    } catch (e) {
+      setImportResult({ error: e.message });
+    }
+    setImporting(false);
+  }
 
   function handleKeyDown(e) {
     if (e.key === 'Escape') { close(); inputRef.current?.blur(); }
@@ -120,13 +192,14 @@ export default function GlobalSearch({ onOpenThread }) {
             <div className="gsearch-not-found">
               <div className="gsearch-nf-title">Message-ID no encontrado en Jarvis</div>
               <div className="gsearch-nf-hint">{results.suggestion}</div>
+              <ImportButton query={query} importing={importing} importResult={importResult} onImport={handleImport} onOpenThread={openThread} />
             </div>
           )}
 
           {!loading && results && !results.not_found_message_id && results.total === 0 && (
             <div className="gsearch-empty">
               <div>Sin resultados para <strong>"{query}"</strong></div>
-              <div className="gsearch-empty-hint">¿No aparece? Usa ↻ Actualizar para escanear Gmail.</div>
+              <ImportButton query={query} importing={importing} importResult={importResult} onImport={handleImport} onOpenThread={openThread} />
             </div>
           )}
 

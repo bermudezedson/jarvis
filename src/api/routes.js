@@ -2001,6 +2001,71 @@ router.get('/agent/alerts', (req, res) => {
   }
 });
 
+// ─── Import thread from Gmail ────────────────────────────────────────────────
+
+router.post('/mail/import-thread', async (req, res) => {
+  const { query } = req.body;
+  if (!query || typeof query !== 'string' || query.trim().length < 3) {
+    return res.status(400).json({ error: 'query debe tener al menos 3 caracteres' });
+  }
+
+  try {
+    const gmail   = require('../mcp/gmail');
+    const mailOps = require('../skills/mail-ops');
+    const db      = require('../db/database');
+    const sqlDb   = db.getDb();
+
+    // 1. Search Gmail
+    logger.info('Importing threads from Gmail', { query: query.trim() });
+    const gmailThreads = await gmail.searchGmailByQuery(query.trim(), 5);
+
+    if (!gmailThreads.length) {
+      return res.json({
+        success: true, imported: [], already_existed: [], total: 0,
+        message: 'No se encontró ningún correo con ese criterio en Gmail (últimos 30 días)',
+      });
+    }
+
+    // 2. Split into new vs already existing
+    const newThreads      = [];
+    const alreadyExisted  = [];
+
+    for (const t of gmailThreads) {
+      const existing = sqlDb.prepare('SELECT thread_id, subject, client_name, estado, severity, date, jira_issue_key FROM threads WHERE thread_id = ?').get(t.id);
+      if (existing) {
+        alreadyExisted.push({ ...existing, already_exists: true });
+      } else {
+        newThreads.push(t);
+      }
+    }
+
+    // 3. Run new threads through the full classification pipeline (same 5 layers as universal scan)
+    let importedResults = [];
+    if (newThreads.length > 0) {
+      await mailOps.processUniversalScan(newThreads);
+
+      // Read back the saved threads from SQLite
+      for (const t of newThreads) {
+        const saved = sqlDb.prepare(
+          'SELECT thread_id, subject, client_name, estado, severity, date, jira_issue_key, message_count FROM threads WHERE thread_id = ?'
+        ).get(t.id);
+        if (saved) importedResults.push(saved);
+      }
+    }
+
+    logger.info('Import complete', { imported: importedResults.length, existed: alreadyExisted.length });
+    res.json({
+      success:        true,
+      imported:       importedResults,
+      already_existed: alreadyExisted,
+      total:          importedResults.length + alreadyExisted.length,
+    });
+  } catch (err) {
+    logger.error('Import thread failed', { error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Global search ───────────────────────────────────────────────────────────
 
 router.get('/search', (req, res) => {
